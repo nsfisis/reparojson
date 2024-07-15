@@ -19,16 +19,16 @@ impl From<std::io::Error> for RepairErr {
     }
 }
 
+impl From<SyntaxError> for RepairErr {
+    fn from(value: SyntaxError) -> Self {
+        Self::Invalid(value)
+    }
+}
+
 pub enum SyntaxError {
     UnexpectedEof,
     InvalidValue,
     TrailingData,
-}
-
-impl SyntaxError {
-    fn to_result(self) -> ParserResult {
-        Err(RepairErr::Invalid(self))
-    }
 }
 
 impl std::fmt::Display for SyntaxError {
@@ -59,6 +59,50 @@ struct Parser {
 
 type ParserResult = Result<(), RepairErr>;
 
+trait ByteStream {
+    fn next(&mut self) -> Result<std::io::Result<u8>, SyntaxError> {
+        match self.try_next() {
+            Some(ret) => Ok(ret),
+            None => Err(SyntaxError::UnexpectedEof),
+        }
+    }
+
+    fn peek(&mut self) -> Result<std::io::Result<u8>, SyntaxError> {
+        match self.try_peek() {
+            Some(ret) => Ok(ret),
+            None => Err(SyntaxError::UnexpectedEof),
+        }
+    }
+
+    fn skip(&mut self) {
+        let res = self.try_next();
+        assert!(matches!(res, Some(Ok(_))));
+    }
+
+    fn eof(&mut self) -> bool {
+        self.try_next().is_none()
+    }
+
+    fn try_next(&mut self) -> Option<std::io::Result<u8>>;
+    fn try_peek(&mut self) -> Option<std::io::Result<u8>>;
+}
+
+impl<I: Iterator<Item = std::io::Result<u8>>> ByteStream for Peekable<I> {
+    fn try_next(&mut self) -> Option<std::io::Result<u8>> {
+        Iterator::next(self)
+    }
+
+    fn try_peek(&mut self) -> Option<std::io::Result<u8>> {
+        match Peekable::peek(self) {
+            Some(Ok(c)) => Some(Ok(*c)),
+            Some(Err(_)) => Some(Err(Iterator::next(self)
+                .expect("next() returns some value because peek() returned some value.")
+                .expect_err("next() returns some error because peek() returned some error."))),
+            None => None,
+        }
+    }
+}
+
 impl Parser {
     fn new() -> Self {
         Self { repaired: false }
@@ -68,103 +112,49 @@ impl Parser {
         self.repaired
     }
 
-    fn walk_json<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_json<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         self.walk_element(input, w)?;
-        if input.next().is_none() {
+        if input.eof() {
             Ok(())
         } else {
-            SyntaxError::TrailingData.to_result()
+            Err(SyntaxError::TrailingData.into())
         }
     }
 
-    fn walk_value<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
-        let Some(c) = input.peek() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let Ok(c) = c else {
-            return Err(input.next().unwrap().unwrap_err().into());
-        };
+    fn walk_value<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+        let c = input.peek()??;
 
         match c {
             b'n' => {
-                input.next(); // => n
-                match input.next() {
-                    Some(Ok(b'u')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
-                }
-                match input.next() {
-                    Some(Ok(b'l')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
-                }
-                match input.next() {
-                    Some(Ok(b'l')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
+                input.skip(); // => n
+                let c2 = input.next()??; // u?
+                let c3 = input.next()??; // l?
+                let c4 = input.next()??; // l?
+                if !matches!((c2, c3, c4), (b'u', b'l', b'l')) {
+                    return Err(SyntaxError::InvalidValue.into());
                 }
                 w.write_all(b"null")?;
                 Ok(())
             }
             b't' => {
-                input.next(); // => t
-                match input.next() {
-                    Some(Ok(b'r')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
-                }
-                match input.next() {
-                    Some(Ok(b'u')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
-                }
-                match input.next() {
-                    Some(Ok(b'e')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
+                input.skip(); // => t
+                let c2 = input.next()??; // r?
+                let c3 = input.next()??; // u?
+                let c4 = input.next()??; // e?
+                if !matches!((c2, c3, c4), (b'r', b'u', b'e')) {
+                    return Err(SyntaxError::InvalidValue.into());
                 }
                 w.write_all(b"true")?;
                 Ok(())
             }
             b'f' => {
-                input.next(); // => f
-                match input.next() {
-                    Some(Ok(b'a')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
-                }
-                match input.next() {
-                    Some(Ok(b'l')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
-                }
-                match input.next() {
-                    Some(Ok(b's')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
-                }
-                match input.next() {
-                    Some(Ok(b'e')) => (),
-                    Some(Ok(_)) => return SyntaxError::InvalidValue.to_result(),
-                    Some(Err(err)) => return Err(err.into()),
-                    None => return SyntaxError::UnexpectedEof.to_result(),
+                input.skip(); // => f
+                let c2 = input.next()??; // a?
+                let c3 = input.next()??; // l?
+                let c4 = input.next()??; // s?
+                let c5 = input.next()??; // e?
+                if !matches!((c2, c3, c4, c5), (b'a', b'l', b's', b'e')) {
+                    return Err(SyntaxError::InvalidValue.into());
                 }
                 w.write_all(b"false")?;
                 Ok(())
@@ -172,77 +162,49 @@ impl Parser {
             b'{' => self.walk_object(input, w),
             b'[' => self.walk_array(input, w),
             b'"' => self.walk_string(input, w),
-            b'-' | b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9' => {
-                self.walk_number(input, w)
-            }
-            _ => SyntaxError::InvalidValue.to_result(),
+            b'-' => self.walk_number(input, w),
+            c if c.is_ascii_digit() => self.walk_number(input, w),
+            _ => Err(SyntaxError::InvalidValue.into()),
         }
     }
 
-    fn walk_object<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_object<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         w.write_all(b"{")?;
-        input.next(); // => {
+        input.skip(); // => {
 
         self.walk_ws(input, w)?;
 
         // members_opt
-        let Some(first) = input.peek() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let Ok(first) = first else {
-            return Err(input.next().unwrap().unwrap_err().into());
-        };
-        if *first == b'"' {
+        let first = input.peek()??;
+        if first == b'"' {
             self.walk_members(input, w)?;
         }
 
         // trailing_comma_opt
-        let Some(maybe_comma) = input.peek() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let Ok(maybe_comma) = maybe_comma else {
-            return Err(input.next().unwrap().unwrap_err().into());
-        };
-        if *maybe_comma == b',' {
+        let maybe_comma = input.peek()??;
+        if maybe_comma == b',' {
             self.repaired = true;
-            input.next();
+            input.skip();
             self.walk_ws(input, w)?;
         }
 
-        let Some(last) = input.next() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let last = last?;
+        let last = input.next()??;
         if last != b'}' {
-            return SyntaxError::InvalidValue.to_result();
+            return Err(SyntaxError::InvalidValue.into());
         }
         w.write_all(b"}")?;
         Ok(())
     }
 
-    fn walk_members<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_members<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         loop {
             self.walk_member(input, w)?;
 
             let mut ws = Vec::with_capacity(1024);
             self.walk_ws(input, &mut ws)?;
 
-            let Some(next) = input.peek() else {
-                return SyntaxError::UnexpectedEof.to_result();
-            };
-            let Ok(next) = next else {
-                return Err(input.next().unwrap().unwrap_err().into());
-            };
-
-            match *next {
+            let next = input.peek()??;
+            match next {
                 b'}' => {
                     w.write_all(&ws)?;
                     return Ok(());
@@ -252,17 +214,12 @@ impl Parser {
                     // Re-use the memory buffer to avoid another allocation.
                     ws.clear();
 
-                    input.next();
+                    input.skip();
 
                     self.walk_ws(input, &mut ws)?;
 
-                    let Some(c) = input.peek() else {
-                        return SyntaxError::UnexpectedEof.to_result();
-                    };
-                    let Ok(c) = c else {
-                        return Err(input.next().unwrap().unwrap_err().into());
-                    };
-                    match *c {
+                    let c = input.peek()??;
+                    match c {
                         b'}' => {
                             self.repaired = true;
                             w.write_all(&ws)?;
@@ -283,89 +240,55 @@ impl Parser {
         }
     }
 
-    fn walk_member<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_member<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         self.walk_string(input, w)?;
         self.walk_ws(input, w)?;
-        let Some(colon) = input.next() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let colon = colon?;
+        let colon = input.next()??;
         if colon != b':' {
-            return SyntaxError::InvalidValue.to_result();
+            return Err(SyntaxError::InvalidValue.into());
         }
         w.write_all(b":")?;
         self.walk_ws(input, w)?;
         self.walk_value(input, w)
     }
 
-    fn walk_array<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_array<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         w.write_all(b"[")?;
-        input.next(); // => [
+        input.skip(); // => [
 
         self.walk_ws(input, w)?;
 
         // elements_opt
-        let Some(first) = input.peek() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let Ok(first) = first else {
-            return Err(input.next().unwrap().unwrap_err().into());
-        };
-        if *first != b',' && *first != b']' {
+        let first = input.peek()??;
+        if first != b',' && first != b']' {
             self.walk_elements(input, w)?;
         }
 
         // trailing_comma_opt
-        let Some(maybe_comma) = input.peek() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let Ok(maybe_comma) = maybe_comma else {
-            return Err(input.next().unwrap().unwrap_err().into());
-        };
-        if *maybe_comma == b',' {
+        let maybe_comma = input.peek()??;
+        if maybe_comma == b',' {
             self.repaired = true;
-            input.next();
+            input.skip();
             self.walk_ws(input, w)?;
         }
 
-        let Some(last) = input.next() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let last = last?;
+        let last = input.next()??;
         if last != b']' {
-            return SyntaxError::InvalidValue.to_result();
+            return Err(SyntaxError::InvalidValue.into());
         }
         w.write_all(b"]")?;
         Ok(())
     }
 
-    fn walk_elements<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_elements<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         loop {
             self.walk_value(input, w)?;
 
             let mut ws = Vec::with_capacity(1024);
             self.walk_ws(input, &mut ws)?;
 
-            let Some(next) = input.peek() else {
-                return SyntaxError::UnexpectedEof.to_result();
-            };
-            let Ok(next) = next else {
-                return Err(input.next().unwrap().unwrap_err().into());
-            };
-
-            match *next {
+            let next = input.peek()??;
+            match next {
                 b']' => {
                     w.write_all(&ws)?;
                     return Ok(());
@@ -375,17 +298,12 @@ impl Parser {
                     // Re-use the memory buffer to avoid another allocation.
                     ws.clear();
 
-                    input.next();
+                    input.skip();
 
                     self.walk_ws(input, &mut ws)?;
 
-                    let Some(c) = input.peek() else {
-                        return SyntaxError::UnexpectedEof.to_result();
-                    };
-                    let Ok(c) = c else {
-                        return Err(input.next().unwrap().unwrap_err().into());
-                    };
-                    match *c {
+                    let c = input.peek()??;
+                    match c {
                         b']' => {
                             self.repaired = true;
                             w.write_all(&ws)?;
@@ -406,108 +324,63 @@ impl Parser {
         }
     }
 
-    fn walk_element<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_element<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         self.walk_ws(input, w)?;
         self.walk_value(input, w)?;
         self.walk_ws(input, w)
     }
 
-    fn walk_string<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_string<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         w.write_all(b"\"")?;
-        input.next(); // => "
+        input.skip(); // => "
         loop {
-            match input.next() {
-                Some(Ok(b'"')) => break,
-                Some(Ok(b'\\')) => {
+            match input.next()?? {
+                b'"' => break,
+                b'\\' => {
                     self.walk_escape(input, w)?;
                 }
-                Some(Ok(c)) => {
+                c => {
                     w.write_all(&[c])?;
                 }
-                Some(Err(_)) => return Err(input.next().unwrap().unwrap_err().into()),
-                None => return SyntaxError::UnexpectedEof.to_result(),
             }
         }
         w.write_all(b"\"")?;
         Ok(())
     }
 
-    fn walk_escape<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
-        let Some(c) = input.next() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let c = c?;
+    fn walk_escape<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+        let c = input.next()??;
         match c {
             b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => {
                 w.write_all(&[b'\\', c])?;
             }
             b'u' => {
-                let Some(u1) = input.next() else {
-                    return SyntaxError::UnexpectedEof.to_result();
-                };
-                let u1 = u1?;
-                if !u1.is_ascii_hexdigit() {
-                    return SyntaxError::InvalidValue.to_result();
-                }
-                let Some(u2) = input.next() else {
-                    return SyntaxError::UnexpectedEof.to_result();
-                };
-                let u2 = u2?;
-                if !u2.is_ascii_hexdigit() {
-                    return SyntaxError::InvalidValue.to_result();
-                }
-                let Some(u3) = input.next() else {
-                    return SyntaxError::UnexpectedEof.to_result();
-                };
-                let u3 = u3?;
-                if !u3.is_ascii_hexdigit() {
-                    return SyntaxError::InvalidValue.to_result();
-                }
-                let Some(u4) = input.next() else {
-                    return SyntaxError::UnexpectedEof.to_result();
-                };
-                let u4 = u4?;
-                if !u4.is_ascii_hexdigit() {
-                    return SyntaxError::InvalidValue.to_result();
+                let u1 = input.next()??;
+                let u2 = input.next()??;
+                let u3 = input.next()??;
+                let u4 = input.next()??;
+                if !u1.is_ascii_hexdigit()
+                    || !u2.is_ascii_hexdigit()
+                    || !u3.is_ascii_hexdigit()
+                    || !u4.is_ascii_hexdigit()
+                {
+                    return Err(SyntaxError::InvalidValue.into());
                 }
                 w.write_all(&[b'\\', u1, u2, u3, u4])?;
             }
-            _ => return SyntaxError::InvalidValue.to_result(),
+            _ => return Err(SyntaxError::InvalidValue.into()),
         }
         Ok(())
     }
 
-    fn walk_number<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_number<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         self.walk_integer(input, w)?;
         self.walk_fraction(input, w)?;
         self.walk_exponent(input, w)
     }
 
-    fn walk_integer<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
-        let Some(first) = input.next() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let first = first?;
+    fn walk_integer<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+        let first = input.next()??;
         match first {
             b'-' => {
                 w.write_all(b"-")?;
@@ -520,128 +393,93 @@ impl Parser {
             b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9' => {
                 w.write_all(&[first])?;
                 loop {
-                    match input.peek() {
-                        Some(Ok(c @ b'0')) | Some(Ok(c @ b'1')) | Some(Ok(c @ b'2'))
-                        | Some(Ok(c @ b'3')) | Some(Ok(c @ b'4')) | Some(Ok(c @ b'5'))
-                        | Some(Ok(c @ b'6')) | Some(Ok(c @ b'7')) | Some(Ok(c @ b'8'))
-                        | Some(Ok(c @ b'9')) => {
-                            w.write_all(&[*c])?;
-                            input.next();
-                        }
-                        Some(Ok(_)) => break,
-                        Some(Err(_)) => return Err(input.next().unwrap().unwrap_err().into()),
-                        None => return Ok(()),
+                    let Some(c) = input.try_peek() else {
+                        return Ok(());
+                    };
+                    let c = c?;
+                    if c.is_ascii_digit() {
+                        w.write_all(&[c])?;
+                        input.skip();
+                    } else {
+                        break;
                     }
                 }
             }
-            _ => return SyntaxError::InvalidValue.to_result(),
+            _ => return Err(SyntaxError::InvalidValue.into()),
         }
         Ok(())
     }
 
-    fn walk_digits<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_digits<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         let mut has_digit = false;
         loop {
-            match input.peek() {
-                Some(Ok(c @ b'0')) | Some(Ok(c @ b'1')) | Some(Ok(c @ b'2'))
-                | Some(Ok(c @ b'3')) | Some(Ok(c @ b'4')) | Some(Ok(c @ b'5'))
-                | Some(Ok(c @ b'6')) | Some(Ok(c @ b'7')) | Some(Ok(c @ b'8'))
-                | Some(Ok(c @ b'9')) => {
-                    w.write_all(&[*c])?;
-                    input.next();
-                    has_digit = true;
-                }
-                Some(Ok(_)) => break,
-                Some(Err(_)) => return Err(input.next().unwrap().unwrap_err().into()),
-                None => break,
+            let Some(c) = input.try_peek() else {
+                break;
+            };
+            let c = c?;
+            if c.is_ascii_digit() {
+                w.write_all(&[c])?;
+                input.skip();
+                has_digit = true;
+            } else {
+                break;
             }
         }
         if has_digit {
             Ok(())
         } else {
-            match input.peek() {
-                Some(_) => SyntaxError::InvalidValue.to_result(),
-                None => SyntaxError::UnexpectedEof.to_result(),
-            }
+            Err(SyntaxError::InvalidValue.into())
         }
     }
 
-    fn walk_fraction<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
-        let Some(first) = input.peek() else {
+    fn walk_fraction<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+        let Some(first) = input.try_peek() else {
             return Ok(());
         };
-        let Ok(first) = first else {
-            return Err(input.next().unwrap().unwrap_err().into());
-        };
-        if *first != b'.' {
+        let first = first?;
+        if first != b'.' {
             return Ok(());
         }
         w.write_all(b".")?;
-        input.next();
+        input.skip();
         self.walk_digits(input, w)
     }
 
-    fn walk_exponent<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
-        let Some(first) = input.peek() else {
+    fn walk_exponent<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+        let Some(first) = input.try_peek() else {
             return Ok(());
         };
-        let Ok(first) = first else {
-            return Err(input.next().unwrap().unwrap_err().into());
-        };
-        if *first != b'e' && *first != b'E' {
+        let first = first?;
+        if first != b'e' && first != b'E' {
             return Ok(());
         }
-        w.write_all(&[*first])?;
-        input.next();
+        w.write_all(&[first])?;
+        input.skip();
         self.walk_sign(input, w)?;
         self.walk_digits(input, w)
     }
 
-    fn walk_sign<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
-        let Some(c) = input.peek() else {
-            return SyntaxError::UnexpectedEof.to_result();
-        };
-        let Ok(c) = c else {
-            return Err(input.next().unwrap().unwrap_err().into());
-        };
-        if *c == b'+' || *c == b'-' {
-            w.write_all(&[*c])?;
-            input.next();
+    fn walk_sign<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+        let c = input.peek()??;
+        if c == b'+' || c == b'-' {
+            w.write_all(&[c])?;
+            input.skip();
         }
         Ok(())
     }
 
-    fn walk_ws<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
-        &mut self,
-        input: &mut Peekable<I>,
-        w: &mut W,
-    ) -> ParserResult {
+    fn walk_ws<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
         loop {
-            match input.peek() {
-                Some(Ok(c @ 0x09)) | Some(Ok(c @ 0x0A)) | Some(Ok(c @ 0x0D))
-                | Some(Ok(c @ 0x20)) => {
-                    w.write_all(&[*c])?;
-                    input.next();
+            let Some(c) = input.try_peek() else {
+                return Ok(());
+            };
+            let c = c?;
+            match c {
+                0x09 | 0x0A | 0x0D | 0x20 => {
+                    w.write_all(&[c])?;
+                    input.skip();
                 }
-                Some(Ok(_)) => return Ok(()),
-                Some(Err(_)) => return Err(input.next().unwrap().unwrap_err().into()),
-                None => return Ok(()),
+                _ => return Ok(()),
             }
         }
     }
