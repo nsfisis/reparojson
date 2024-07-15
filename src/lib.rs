@@ -22,6 +22,7 @@ impl From<std::io::Error> for RepairErr {
 pub enum SyntaxError {
     UnexpectedEof,
     InvalidValue,
+    TrailingData,
 }
 
 impl SyntaxError {
@@ -35,6 +36,7 @@ impl std::fmt::Display for SyntaxError {
         match self {
             Self::UnexpectedEof => write!(f, "unexpected end of file"),
             Self::InvalidValue => write!(f, "invalid value"),
+            Self::TrailingData => write!(f, "unexpected data at the end"),
         }
     }
 }
@@ -71,7 +73,12 @@ impl Parser {
         input: &mut Peekable<I>,
         w: &mut W,
     ) -> ParserResult {
-        self.walk_element(input, w)
+        self.walk_element(input, w)?;
+        if input.next().is_none() {
+            Ok(())
+        } else {
+            SyntaxError::TrailingData.to_result()
+        }
     }
 
     fn walk_value<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
@@ -242,6 +249,7 @@ impl Parser {
                 }
                 b',' => {
                     w.write_all(&mut ws)?;
+                    ws.clear();
 
                     input.next();
 
@@ -362,6 +370,7 @@ impl Parser {
                 }
                 b',' => {
                     w.write_all(&mut ws)?;
+                    ws.clear();
 
                     input.next();
 
@@ -631,6 +640,88 @@ impl Parser {
                 Some(Err(_)) => return Err(input.next().unwrap().unwrap_err().into()),
                 None => return Ok(()),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn repair(input: &str) -> (super::RepairResult, String) {
+        let mut output = Vec::new();
+        let result = super::repair(input.as_bytes(), &mut output);
+        (result, String::from_utf8(output).unwrap())
+    }
+
+    #[test]
+    fn test_repair_invalid() {
+        assert!(repair(r#"foo"#).0.is_err());
+        assert!(repair(r#"{{}"#).0.is_err());
+        assert!(repair(r#"[]]"#).0.is_err());
+        assert!(repair(r#"[,,]"#).0.is_err());
+        assert!(repair(r#"[,,,]"#).0.is_err());
+        assert!(repair(r#"{,,}"#).0.is_err());
+        assert!(repair(r#"{,,,}"#).0.is_err());
+    }
+
+    #[test]
+    fn test_repair_valid() {
+        {
+            let s = r#"null"#;
+            let (res, out) = repair(s);
+            assert!(res.is_ok());
+            assert_eq!(s, out);
+        }
+        {
+            let s = r#" true"#;
+            let (res, out) = repair(s);
+            assert!(res.is_ok());
+            assert_eq!(s, out);
+        }
+        {
+            let s = r#" false "#;
+            let (res, out) = repair(s);
+            assert!(res.is_ok());
+            assert_eq!(s, out);
+        }
+        {
+            let s = r#" 123.0e-1 "#;
+            let (res, out) = repair(s);
+            assert!(res.is_ok());
+            assert_eq!(s, out);
+        }
+        {
+            let s = r#""foo\"bar\"""#;
+            let (res, out) = repair(s);
+            assert!(res.is_ok());
+            assert_eq!(s, out);
+        }
+    }
+
+    #[test]
+    fn test_repair_repaired() {
+        {
+            let s = r#"[  , ]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[   ]", out);
+        }
+        {
+            let s = r#"[   1 ,  ]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[   1   ]", out);
+        }
+        {
+            let s = r#"[1   2  ]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[1,   2  ]", out);
+        }
+        {
+            let s = r#"[1   2  ,]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[1,   2  ]", out);
         }
     }
 }
