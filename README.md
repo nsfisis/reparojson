@@ -38,4 +38,4 @@ $ echo '{ "foo": 1, "bar": 2, }' | reparojson
 
 ## License
 
-See (LICENSE)[./LICENSE].
+See [LICENSE](./LICENSE).
