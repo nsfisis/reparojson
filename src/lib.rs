@@ -244,11 +244,12 @@ impl Parser {
 
             match *next {
                 b'}' => {
-                    w.write_all(&mut ws)?;
+                    w.write_all(&ws)?;
                     return Ok(());
                 }
                 b',' => {
-                    w.write_all(&mut ws)?;
+                    w.write_all(&ws)?;
+                    // Re-use the memory buffer to avoid another allocation.
                     ws.clear();
 
                     input.next();
@@ -264,19 +265,19 @@ impl Parser {
                     match *c {
                         b'}' => {
                             self.repaired = true;
-                            w.write_all(&mut ws)?;
+                            w.write_all(&ws)?;
                             return Ok(());
                         }
                         _ => {
                             w.write_all(b",")?;
-                            w.write_all(&mut ws)?;
+                            w.write_all(&ws)?;
                         }
                     }
                 }
                 _ => {
                     self.repaired = true;
                     w.write_all(b",")?;
-                    w.write_all(&mut ws)?;
+                    w.write_all(&ws)?;
                 }
             }
         }
@@ -366,11 +367,12 @@ impl Parser {
 
             match *next {
                 b']' => {
-                    w.write_all(&mut ws)?;
+                    w.write_all(&ws)?;
                     return Ok(());
                 }
                 b',' => {
-                    w.write_all(&mut ws)?;
+                    w.write_all(&ws)?;
+                    // Re-use the memory buffer to avoid another allocation.
                     ws.clear();
 
                     input.next();
@@ -386,19 +388,19 @@ impl Parser {
                     match *c {
                         b']' => {
                             self.repaired = true;
-                            w.write_all(&mut ws)?;
+                            w.write_all(&ws)?;
                             return Ok(());
                         }
                         _ => {
                             w.write_all(b",")?;
-                            w.write_all(&mut ws)?;
+                            w.write_all(&ws)?;
                         }
                     }
                 }
                 _ => {
                     self.repaired = true;
                     w.write_all(b",")?;
-                    w.write_all(&mut ws)?;
+                    w.write_all(&ws)?;
                 }
             }
         }
