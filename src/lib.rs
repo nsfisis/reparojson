@@ -42,8 +42,9 @@ impl std::fmt::Display for SyntaxError {
 }
 
 pub fn repair(r: impl Read, mut w: impl Write) -> RepairResult {
-    let mut p = Parser::new();
-    match p.walk_json(&mut r.bytes().peekable(), &mut w) {
+    let mut r = r.bytes().peekable();
+    let mut p = Parser::new(&mut r, &mut w);
+    match p.walk_json() {
         Ok(_) => Ok(if p.repaired() {
             RepairOk::Repaired
         } else {
@@ -53,7 +54,9 @@ pub fn repair(r: impl Read, mut w: impl Write) -> RepairResult {
     }
 }
 
-struct Parser {
+struct Parser<'input, 'output, I: ByteStream, W: Write> {
+    input: &'input mut I,
+    output: &'output mut W,
     repaired: bool,
 }
 
@@ -103,262 +106,243 @@ impl<I: Iterator<Item = std::io::Result<u8>>> ByteStream for Peekable<I> {
     }
 }
 
-impl Parser {
-    fn new() -> Self {
-        Self { repaired: false }
+impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
+    fn new(input: &'input mut I, output: &'output mut W) -> Self {
+        Self {
+            input,
+            output,
+            repaired: false,
+        }
     }
 
     fn repaired(&self) -> bool {
         self.repaired
     }
 
-    fn walk_json<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        self.walk_element(input, w)?;
-        if input.eof() {
+    fn walk_json(&mut self) -> ParserResult {
+        self.walk_element()?;
+        if self.input.eof() {
             Ok(())
         } else {
             Err(SyntaxError::TrailingData.into())
         }
     }
 
-    fn walk_value<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        let c = input.peek()??;
+    fn walk_value(&mut self) -> ParserResult {
+        let c = self.input.peek()??;
 
         match c {
             b'n' => {
-                input.skip(); // => n
-                let c2 = input.next()??; // u?
-                let c3 = input.next()??; // l?
-                let c4 = input.next()??; // l?
-                if !matches!((c2, c3, c4), (b'u', b'l', b'l')) {
-                    return Err(SyntaxError::InvalidValue.into());
-                }
-                w.write_all(b"null")?;
+                self.input.skip(); // => n
+                self.output.write_all(b"n")?;
+                self.walk_char_of(b'u')?;
+                self.walk_char_of(b'l')?;
+                self.walk_char_of(b'l')?;
                 Ok(())
             }
             b't' => {
-                input.skip(); // => t
-                let c2 = input.next()??; // r?
-                let c3 = input.next()??; // u?
-                let c4 = input.next()??; // e?
-                if !matches!((c2, c3, c4), (b'r', b'u', b'e')) {
-                    return Err(SyntaxError::InvalidValue.into());
-                }
-                w.write_all(b"true")?;
+                self.input.skip(); // => t
+                self.output.write_all(b"t")?;
+                self.walk_char_of(b'r')?;
+                self.walk_char_of(b'u')?;
+                self.walk_char_of(b'e')?;
                 Ok(())
             }
             b'f' => {
-                input.skip(); // => f
-                let c2 = input.next()??; // a?
-                let c3 = input.next()??; // l?
-                let c4 = input.next()??; // s?
-                let c5 = input.next()??; // e?
-                if !matches!((c2, c3, c4, c5), (b'a', b'l', b's', b'e')) {
-                    return Err(SyntaxError::InvalidValue.into());
-                }
-                w.write_all(b"false")?;
+                self.input.skip(); // => f
+                self.output.write_all(b"f")?;
+                self.walk_char_of(b'a')?;
+                self.walk_char_of(b'l')?;
+                self.walk_char_of(b's')?;
+                self.walk_char_of(b'e')?;
                 Ok(())
             }
-            b'{' => self.walk_object(input, w),
-            b'[' => self.walk_array(input, w),
-            b'"' => self.walk_string(input, w),
-            b'-' => self.walk_number(input, w),
-            c if c.is_ascii_digit() => self.walk_number(input, w),
+            b'{' => self.walk_object(),
+            b'[' => self.walk_array(),
+            b'"' => self.walk_string(),
+            b'-' => self.walk_number(),
+            c if c.is_ascii_digit() => self.walk_number(),
             _ => Err(SyntaxError::InvalidValue.into()),
         }
     }
 
-    fn walk_object<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        w.write_all(b"{")?;
-        input.skip(); // => {
+    fn walk_object(&mut self) -> ParserResult {
+        self.output.write_all(b"{")?;
+        self.input.skip(); // => {
 
-        self.walk_ws(input, w)?;
+        self.walk_ws()?;
 
         // members_opt
-        let first = input.peek()??;
+        let first = self.input.peek()??;
         if first == b'"' {
-            self.walk_members(input, w)?;
+            self.walk_members()?;
         }
 
         // trailing_comma_opt
-        let maybe_comma = input.peek()??;
+        let maybe_comma = self.input.peek()??;
         if maybe_comma == b',' {
             self.repaired = true;
-            input.skip();
-            self.walk_ws(input, w)?;
+            self.input.skip();
+            self.walk_ws()?;
         }
 
-        let last = input.next()??;
-        if last != b'}' {
-            return Err(SyntaxError::InvalidValue.into());
-        }
-        w.write_all(b"}")?;
-        Ok(())
+        self.walk_char_of(b'}')
     }
 
-    fn walk_members<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+    fn walk_members(&mut self) -> ParserResult {
         loop {
-            self.walk_member(input, w)?;
+            self.walk_member()?;
 
             let mut ws = Vec::with_capacity(1024);
-            self.walk_ws(input, &mut ws)?;
+            self.walk_ws_with_buf(&mut ws)?;
 
-            let next = input.peek()??;
+            let next = self.input.peek()??;
             match next {
                 b'}' => {
-                    w.write_all(&ws)?;
+                    self.output.write_all(&ws)?;
                     return Ok(());
                 }
                 b',' => {
-                    w.write_all(&ws)?;
+                    self.output.write_all(&ws)?;
                     // Re-use the memory buffer to avoid another allocation.
                     ws.clear();
 
-                    input.skip();
+                    self.input.skip();
 
-                    self.walk_ws(input, &mut ws)?;
+                    self.walk_ws_with_buf(&mut ws)?;
 
-                    let c = input.peek()??;
+                    let c = self.input.peek()??;
                     match c {
                         b'}' => {
                             self.repaired = true;
-                            w.write_all(&ws)?;
+                            self.output.write_all(&ws)?;
                             return Ok(());
                         }
                         _ => {
-                            w.write_all(b",")?;
-                            w.write_all(&ws)?;
+                            self.output.write_all(b",")?;
+                            self.output.write_all(&ws)?;
                         }
                     }
                 }
                 _ => {
                     self.repaired = true;
-                    w.write_all(b",")?;
-                    w.write_all(&ws)?;
+                    self.output.write_all(b",")?;
+                    self.output.write_all(&ws)?;
                 }
             }
         }
     }
 
-    fn walk_member<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        self.walk_string(input, w)?;
-        self.walk_ws(input, w)?;
-        let colon = input.next()??;
-        if colon != b':' {
-            return Err(SyntaxError::InvalidValue.into());
-        }
-        w.write_all(b":")?;
-        self.walk_ws(input, w)?;
-        self.walk_value(input, w)
+    fn walk_member(&mut self) -> ParserResult {
+        self.walk_string()?;
+        self.walk_ws()?;
+        self.walk_char_of(b':')?;
+        self.walk_ws()?;
+        self.walk_value()
     }
 
-    fn walk_array<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        w.write_all(b"[")?;
-        input.skip(); // => [
+    fn walk_array(&mut self) -> ParserResult {
+        self.output.write_all(b"[")?;
+        self.input.skip(); // => [
 
-        self.walk_ws(input, w)?;
+        self.walk_ws()?;
 
         // elements_opt
-        let first = input.peek()??;
+        let first = self.input.peek()??;
         if first != b',' && first != b']' {
-            self.walk_elements(input, w)?;
+            self.walk_elements()?;
         }
 
         // trailing_comma_opt
-        let maybe_comma = input.peek()??;
+        let maybe_comma = self.input.peek()??;
         if maybe_comma == b',' {
             self.repaired = true;
-            input.skip();
-            self.walk_ws(input, w)?;
+            self.input.skip();
+            self.walk_ws()?;
         }
 
-        let last = input.next()??;
-        if last != b']' {
-            return Err(SyntaxError::InvalidValue.into());
-        }
-        w.write_all(b"]")?;
-        Ok(())
+        self.walk_char_of(b']')
     }
 
-    fn walk_elements<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+    fn walk_elements(&mut self) -> ParserResult {
         loop {
-            self.walk_value(input, w)?;
+            self.walk_value()?;
 
             let mut ws = Vec::with_capacity(1024);
-            self.walk_ws(input, &mut ws)?;
+            self.walk_ws_with_buf(&mut ws)?;
 
-            let next = input.peek()??;
+            let next = self.input.peek()??;
             match next {
                 b']' => {
-                    w.write_all(&ws)?;
+                    self.output.write_all(&ws)?;
                     return Ok(());
                 }
                 b',' => {
-                    w.write_all(&ws)?;
+                    self.output.write_all(&ws)?;
                     // Re-use the memory buffer to avoid another allocation.
                     ws.clear();
 
-                    input.skip();
+                    self.input.skip();
 
-                    self.walk_ws(input, &mut ws)?;
+                    self.walk_ws_with_buf(&mut ws)?;
 
-                    let c = input.peek()??;
+                    let c = self.input.peek()??;
                     match c {
                         b']' => {
                             self.repaired = true;
-                            w.write_all(&ws)?;
+                            self.output.write_all(&ws)?;
                             return Ok(());
                         }
                         _ => {
-                            w.write_all(b",")?;
-                            w.write_all(&ws)?;
+                            self.output.write_all(b",")?;
+                            self.output.write_all(&ws)?;
                         }
                     }
                 }
                 _ => {
                     self.repaired = true;
-                    w.write_all(b",")?;
-                    w.write_all(&ws)?;
+                    self.output.write_all(b",")?;
+                    self.output.write_all(&ws)?;
                 }
             }
         }
     }
 
-    fn walk_element<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        self.walk_ws(input, w)?;
-        self.walk_value(input, w)?;
-        self.walk_ws(input, w)
+    fn walk_element(&mut self) -> ParserResult {
+        self.walk_ws()?;
+        self.walk_value()?;
+        self.walk_ws()
     }
 
-    fn walk_string<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        w.write_all(b"\"")?;
-        input.skip(); // => "
+    fn walk_string(&mut self) -> ParserResult {
+        self.output.write_all(b"\"")?;
+        self.input.skip(); // => "
         loop {
-            match input.next()?? {
+            match self.input.next()?? {
                 b'"' => break,
                 b'\\' => {
-                    self.walk_escape(input, w)?;
+                    self.walk_escape()?;
                 }
                 c => {
-                    w.write_all(&[c])?;
+                    self.output.write_all(&[c])?;
                 }
             }
         }
-        w.write_all(b"\"")?;
+        self.output.write_all(b"\"")?;
         Ok(())
     }
 
-    fn walk_escape<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        let c = input.next()??;
+    fn walk_escape(&mut self) -> ParserResult {
+        let c = self.input.next()??;
         match c {
             b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => {
-                w.write_all(&[b'\\', c])?;
+                self.output.write_all(&[b'\\', c])?;
             }
             b'u' => {
-                let u1 = input.next()??;
-                let u2 = input.next()??;
-                let u3 = input.next()??;
-                let u4 = input.next()??;
+                let u1 = self.input.next()??;
+                let u2 = self.input.next()??;
+                let u3 = self.input.next()??;
+                let u4 = self.input.next()??;
                 if !u1.is_ascii_hexdigit()
                     || !u2.is_ascii_hexdigit()
                     || !u3.is_ascii_hexdigit()
@@ -366,40 +350,40 @@ impl Parser {
                 {
                     return Err(SyntaxError::InvalidValue.into());
                 }
-                w.write_all(&[b'\\', u1, u2, u3, u4])?;
+                self.output.write_all(&[b'\\', u1, u2, u3, u4])?;
             }
             _ => return Err(SyntaxError::InvalidValue.into()),
         }
         Ok(())
     }
 
-    fn walk_number<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        self.walk_integer(input, w)?;
-        self.walk_fraction(input, w)?;
-        self.walk_exponent(input, w)
+    fn walk_number(&mut self) -> ParserResult {
+        self.walk_integer()?;
+        self.walk_fraction()?;
+        self.walk_exponent()
     }
 
-    fn walk_integer<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        let first = input.next()??;
+    fn walk_integer(&mut self) -> ParserResult {
+        let first = self.input.next()??;
         match first {
             b'-' => {
-                w.write_all(b"-")?;
-                return self.walk_integer(input, w);
+                self.output.write_all(b"-")?;
+                return self.walk_integer();
             }
             b'0' => {
-                w.write_all(b"0")?;
+                self.output.write_all(b"0")?;
                 return Ok(());
             }
             b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9' => {
-                w.write_all(&[first])?;
+                self.output.write_all(&[first])?;
                 loop {
-                    let Some(c) = input.try_peek() else {
+                    let Some(c) = self.input.try_peek() else {
                         return Ok(());
                     };
                     let c = c?;
                     if c.is_ascii_digit() {
-                        w.write_all(&[c])?;
-                        input.skip();
+                        self.output.write_all(&[c])?;
+                        self.input.skip();
                     } else {
                         break;
                     }
@@ -410,16 +394,16 @@ impl Parser {
         Ok(())
     }
 
-    fn walk_digits<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+    fn walk_digits(&mut self) -> ParserResult {
         let mut has_digit = false;
         loop {
-            let Some(c) = input.try_peek() else {
+            let Some(c) = self.input.try_peek() else {
                 break;
             };
             let c = c?;
             if c.is_ascii_digit() {
-                w.write_all(&[c])?;
-                input.skip();
+                self.output.write_all(&[c])?;
+                self.input.skip();
                 has_digit = true;
             } else {
                 break;
@@ -432,43 +416,51 @@ impl Parser {
         }
     }
 
-    fn walk_fraction<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        let Some(first) = input.try_peek() else {
+    fn walk_fraction(&mut self) -> ParserResult {
+        let Some(first) = self.input.try_peek() else {
             return Ok(());
         };
         let first = first?;
         if first != b'.' {
             return Ok(());
         }
-        w.write_all(b".")?;
-        input.skip();
-        self.walk_digits(input, w)
+        self.output.write_all(b".")?;
+        self.input.skip();
+        self.walk_digits()
     }
 
-    fn walk_exponent<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        let Some(first) = input.try_peek() else {
+    fn walk_exponent(&mut self) -> ParserResult {
+        let Some(first) = self.input.try_peek() else {
             return Ok(());
         };
         let first = first?;
         if first != b'e' && first != b'E' {
             return Ok(());
         }
-        w.write_all(&[first])?;
-        input.skip();
-        self.walk_sign(input, w)?;
-        self.walk_digits(input, w)
+        self.output.write_all(&[first])?;
+        self.input.skip();
+        self.walk_sign()?;
+        self.walk_digits()
     }
 
-    fn walk_sign<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
-        let c = input.peek()??;
+    fn walk_sign(&mut self) -> ParserResult {
+        let c = self.input.peek()??;
         if c == b'+' || c == b'-' {
-            w.write_all(&[c])?;
-            input.skip();
+            self.output.write_all(&[c])?;
+            self.input.skip();
         }
         Ok(())
     }
 
-    fn walk_ws<I: ByteStream, W: Write>(&mut self, input: &mut I, w: &mut W) -> ParserResult {
+    fn walk_ws(&mut self) -> ParserResult {
+        Self::do_walk_ws(self.input, self.output)
+    }
+
+    fn walk_ws_with_buf(&mut self, buf: &mut Vec<u8>) -> ParserResult {
+        Self::do_walk_ws(self.input, buf)
+    }
+
+    fn do_walk_ws<Output: Write>(input: &mut I, output: &mut Output) -> ParserResult {
         loop {
             let Some(c) = input.try_peek() else {
                 return Ok(());
@@ -476,12 +468,21 @@ impl Parser {
             let c = c?;
             match c {
                 0x09 | 0x0A | 0x0D | 0x20 => {
-                    w.write_all(&[c])?;
+                    output.write_all(&[c])?;
                     input.skip();
                 }
                 _ => return Ok(()),
             }
         }
+    }
+
+    fn walk_char_of(&mut self, expected: u8) -> ParserResult {
+        let c = self.input.next()??;
+        if c != expected {
+            return Err(SyntaxError::InvalidValue.into());
+        }
+        self.output.write_all(&[c])?;
+        Ok(())
     }
 }
 
