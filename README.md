@@ -36,6 +36,29 @@ $ echo '{ "foo": 1, "bar": 2, }' | reparojson
 ```
 
 
+## Editor Integration Examples
+
+### Neovim + nvim-lspconfig + efm-langserver
+
+```lua
+local lspconfig = require('lspconfig')
+lspconfig.efm.setup({
+   init_options = { documentFormatting = true },
+   settings = {
+      rootMarkers = {".git/"},
+      languages = {
+         json = {
+            {
+               formatCommand = "reparojson -q",
+               formatStdin = true,
+            },
+         },
+      },
+   }
+})
+```
+
+
 ## License
 
 See [LICENSE](./LICENSE).
