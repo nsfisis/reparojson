@@ -103,3 +103,32 @@ ws
     '000D' ws
     '0009' ws
 ```
+
+```
+object
+    { ws members_opt trailing_comma_opt }
+
+members_opt
+    <empty>
+    members
+
+trailing_comma_opt
+    <empty>
+    , ws
+
+members
+    (member ws trailing_comma_opt)+
+
+member
+    string ws : ws value
+
+array
+    [ ws elements_opt trailing_comma_opt ]
+
+elements_opt
+    <empty>
+    elements
+
+elements
+    (value ws trailing_comma_opt)+
+```
