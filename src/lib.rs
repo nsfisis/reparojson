@@ -297,7 +297,8 @@ impl Parser {
             return SyntaxError::InvalidValue.to_result();
         }
         w.write_all(b":")?;
-        self.walk_element(input, w)
+        self.walk_ws(input, w)?;
+        self.walk_value(input, w)
     }
 
     fn walk_array<I: Iterator<Item = std::io::Result<u8>>, W: Write>(
@@ -722,6 +723,30 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!("[1,   2  ]", out);
+        }
+        {
+            let s = r#"{  , }"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{   }"#, out);
+        }
+        {
+            let s = r#"{   "a":1 ,  }"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{   "a":1   }"#, out);
+        }
+        {
+            let s = r#"{"a":1   "b":2  }"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{"a":1,   "b":2  }"#, out);
+        }
+        {
+            let s = r#"{"a":1   "b":2  ,}"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{"a":1,   "b":2  }"#, out);
         }
     }
 }
