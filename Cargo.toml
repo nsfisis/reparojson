@@ -1,6 +1,6 @@
 [package]
 name = "reparojson"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["nsfisis"]
 edition = "2024"
 description = "A simple command-line tool to repair JSON. It only fixes the syntactic errors and never formats the given input."
