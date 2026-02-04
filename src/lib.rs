@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::iter::Peekable;
 
 pub type RepairResult = Result<RepairOk, RepairErr>;
@@ -42,7 +42,7 @@ impl std::fmt::Display for SyntaxError {
 }
 
 pub fn repair(r: impl Read, mut w: impl Write) -> RepairResult {
-    let mut r = r.bytes().peekable();
+    let mut r = BufReader::new(r).bytes().peekable();
     let mut p = Parser::new(&mut r, &mut w);
     match p.walk_json() {
         Ok(_) => Ok(if p.repaired() {
@@ -396,10 +396,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
     fn walk_digits(&mut self) -> ParserResult {
         let mut has_digit = false;
-        loop {
-            let Some(c) = self.input.try_peek() else {
-                break;
-            };
+        while let Some(c) = self.input.try_peek() {
             let c = c?;
             if c.is_ascii_digit() {
                 self.output.write_all(&[c])?;
