@@ -3,11 +3,13 @@ use std::iter::Peekable;
 
 pub type RepairResult = Result<RepairOk, RepairErr>;
 
+#[derive(Debug)]
 pub enum RepairOk {
     Valid,
     Repaired,
 }
 
+#[derive(Debug)]
 pub enum RepairErr {
     Invalid(SyntaxError),
     IoErr(std::io::Error),
@@ -25,6 +27,7 @@ impl From<SyntaxError> for RepairErr {
     }
 }
 
+#[derive(Debug)]
 pub enum SyntaxError {
     UnexpectedEof,
     InvalidValue,
