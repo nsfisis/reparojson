@@ -326,6 +326,10 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                 b'\\' => {
                     self.walk_escape()?;
                 }
+                c if c < 0x20 => {
+                    // A raw byte less than 0x20 cannot be embedded in string.
+                    return Err(SyntaxError::InvalidValue.into());
+                }
                 c => {
                     self.output.write_all(&[c])?;
                 }
