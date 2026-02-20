@@ -353,7 +353,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                 {
                     return Err(SyntaxError::InvalidValue.into());
                 }
-                self.output.write_all(&[b'\\', u1, u2, u3, u4])?;
+                self.output.write_all(&[b'\\', b'u', u1, u2, u3, u4])?;
             }
             _ => return Err(SyntaxError::InvalidValue.into()),
         }
