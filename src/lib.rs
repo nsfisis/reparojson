@@ -163,7 +163,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             b'{' => self.walk_object(),
             b'[' => self.walk_array(),
             b'"' => self.walk_string(),
-            b'-' | b'.' => self.walk_number(),
+            b'-' | b'+' | b'.' => self.walk_number(),
             c if c.is_ascii_digit() => self.walk_number(),
             _ => Err(SyntaxError::InvalidValue.into()),
         }
@@ -390,6 +390,11 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
     }
 
     fn walk_number(&mut self) -> ParserResult {
+        if self.input.peek()?? == b'+' {
+            // Remove a leading plus sign.
+            self.repaired = true;
+            self.input.skip();
+        }
         self.walk_integer()?;
         self.walk_fraction()?;
         self.walk_exponent()
@@ -542,6 +547,9 @@ mod tests {
         assert!(repair(r#"{,,}"#).0.is_err());
         assert!(repair(r#"{,,,}"#).0.is_err());
         assert!(repair(r#"."#).0.is_err());
+        assert!(repair(r#"+"#).0.is_err());
+        assert!(repair(r#"++1"#).0.is_err());
+        assert!(repair(r#"-+1"#).0.is_err());
     }
 
     #[test]
@@ -681,6 +689,18 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!("[-0.5e1, 0.25]", out);
+        }
+        {
+            let s = r#"+1"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("1", out);
+        }
+        {
+            let s = r#"[+1.5e+2, +0]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[1.5e+2, 0]", out);
         }
     }
 }
