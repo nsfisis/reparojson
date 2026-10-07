@@ -238,8 +238,21 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
     fn walk_member(&mut self) -> ParserResult {
         self.walk_string()?;
-        self.walk_ws()?;
-        self.walk_char_of(b':')?;
+
+        let mut ws = Vec::new();
+        self.walk_ws_with_buf(&mut ws)?;
+
+        let maybe_colon = self.input.peek()??;
+        if maybe_colon == b':' {
+            self.output.write_all(&ws)?;
+            self.input.skip();
+            self.output.write_all(b":")?;
+        } else {
+            self.repaired = true;
+            self.output.write_all(b":")?;
+            self.output.write_all(&ws)?;
+        }
+
         self.walk_ws()?;
         self.walk_value()
     }
@@ -592,6 +605,18 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!(r#"{"a":1,   "b":2  }"#, out);
+        }
+        {
+            let s = r#"{"a" 1}"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{"a": 1}"#, out);
+        }
+        {
+            let s = r#"{"a"1  "b"  2}"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{"a":1,  "b":  2}"#, out);
         }
     }
 }
