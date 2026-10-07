@@ -263,18 +263,18 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
         self.walk_ws()?;
 
-        // elements_opt
-        let first = self.input.peek()??;
-        if first != b',' && first != b']' {
-            self.walk_elements()?;
-        }
-
-        // trailing_comma_opt
-        let maybe_comma = self.input.peek()??;
-        if maybe_comma == b',' {
+        // leading_comma_opt
+        let mut first = self.input.peek()??;
+        if first == b',' {
             self.repaired = true;
             self.input.skip();
             self.walk_ws()?;
+            first = self.input.peek()??;
+        }
+
+        // elements_opt
+        if first != b']' {
+            self.walk_elements()?;
         }
 
         self.walk_char_of(b']')
@@ -628,6 +628,18 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!(r#"["a\tb"]"#, out);
+        }
+        {
+            let s = r#"[,1]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[1]", out);
+        }
+        {
+            let s = r#"[ ,  1 2,]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[   1, 2]", out);
         }
     }
 }
