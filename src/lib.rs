@@ -123,12 +123,29 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
     }
 
     fn walk_json(&mut self) -> ParserResult {
+        self.walk_bom()?;
         self.walk_element()?;
         if self.input.eof() {
             Ok(())
         } else {
             Err(SyntaxError::TrailingData.into())
         }
+    }
+
+    fn walk_bom(&mut self) -> ParserResult {
+        let Some(first) = self.input.try_peek() else {
+            return Ok(());
+        };
+        if first? != 0xEF {
+            return Ok(());
+        }
+        // Remove UTF-8 BOM.
+        self.input.skip();
+        if self.input.next()?? != 0xBB || self.input.next()?? != 0xBF {
+            return Err(SyntaxError::InvalidValue.into());
+        }
+        self.repaired = true;
+        Ok(())
     }
 
     fn walk_value(&mut self) -> ParserResult {
@@ -597,6 +614,30 @@ mod tests {
             let (res, out) = repair(s);
             assert!(res.is_ok());
             assert_eq!(s, out);
+        }
+    }
+
+    #[test]
+    fn test_repair_bom() {
+        {
+            let s = "\u{FEFF}[1, 2]";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[1, 2]", out);
+        }
+        {
+            let s = "\u{FEFF} {\"a\": \"\u{FEFF}\"}\n";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(" {\"a\": \"\u{FEFF}\"}\n", out);
+        }
+        assert!(repair("\u{FEFF}").0.is_err());
+        assert!(repair("\u{FEFF}\u{FEFF}1").0.is_err());
+        assert!(repair("1\u{FEFF}").0.is_err());
+        {
+            let mut output = Vec::new();
+            let result = super::repair(&b"\xEF\xBB1"[..], &mut output);
+            assert!(result.is_err());
         }
     }
 
