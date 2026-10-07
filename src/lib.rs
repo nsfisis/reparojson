@@ -302,7 +302,14 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
                     self.walk_ws_with_buf(&mut ws)?;
 
-                    let c = self.input.peek()??;
+                    let mut c = self.input.peek()??;
+                    while c == b',' {
+                        // Remove a duplicate comma.
+                        self.repaired = true;
+                        self.input.skip();
+                        self.walk_ws_with_buf(&mut ws)?;
+                        c = self.input.peek()??;
+                    }
                     match c {
                         b']' => {
                             self.repaired = true;
@@ -640,6 +647,18 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!("[   1, 2]", out);
+        }
+        {
+            let s = r#"[1,,2]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[1,2]", out);
+        }
+        {
+            let s = r#"[1 , , 2,, ,3,,]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[1 ,  2, 3]", out);
         }
     }
 }
