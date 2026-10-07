@@ -61,6 +61,8 @@ struct Parser<'input, 'output, I: ByteStream, W: Write> {
     input: &'input mut I,
     output: &'output mut W,
     repaired: bool,
+    // True if the input ends where unclosed objects and arrays can be closed.
+    truncated: bool,
 }
 
 type ParserResult = Result<(), RepairErr>;
@@ -115,6 +117,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             input,
             output,
             repaired: false,
+            truncated: false,
         }
     }
 
@@ -124,7 +127,13 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
     fn walk_json(&mut self) -> ParserResult {
         self.walk_bom()?;
-        self.walk_element()?;
+        match self.walk_element() {
+            Err(RepairErr::Invalid(SyntaxError::UnexpectedEof)) if self.truncated => {
+                self.repaired = true;
+                return Ok(());
+            }
+            res => res?,
+        }
         if self.input.eof() {
             Ok(())
         } else {
@@ -187,23 +196,30 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
     }
 
     fn walk_object(&mut self) -> ParserResult {
+        let res = self.walk_object_body();
+        self.close_if_truncated(res, b'}')
+    }
+
+    #[inline(always)]
+    fn walk_object_body(&mut self) -> ParserResult {
         self.output.write_all(b"{")?;
         self.input.skip(); // => {
 
         self.walk_ws()?;
 
         // members_opt
-        let first = self.input.peek()??;
+        let first = self.peek_token()?;
         if first == b'"' {
             self.walk_members()?;
         }
 
         // trailing_comma_opt
-        let maybe_comma = self.input.peek()??;
+        let maybe_comma = self.peek_token()?;
         if maybe_comma == b',' {
             self.repaired = true;
             self.input.skip();
             self.walk_ws()?;
+            self.peek_token()?;
         }
 
         self.walk_char_of(b'}')
@@ -216,7 +232,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             let mut ws = Vec::with_capacity(1024);
             self.walk_ws_with_buf(&mut ws)?;
 
-            let next = self.input.peek()??;
+            let next = self.peek_after_ws(&ws)?;
             match next {
                 b'}' => {
                     self.output.write_all(&ws)?;
@@ -231,7 +247,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
                     self.walk_ws_with_buf(&mut ws)?;
 
-                    let c = self.input.peek()??;
+                    let c = self.peek_after_ws(&ws)?;
                     match c {
                         b'}' => {
                             self.repaired = true;
@@ -275,18 +291,24 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
     }
 
     fn walk_array(&mut self) -> ParserResult {
+        let res = self.walk_array_body();
+        self.close_if_truncated(res, b']')
+    }
+
+    #[inline(always)]
+    fn walk_array_body(&mut self) -> ParserResult {
         self.output.write_all(b"[")?;
         self.input.skip(); // => [
 
         self.walk_ws()?;
 
         // leading_comma_opt
-        let mut first = self.input.peek()??;
+        let mut first = self.peek_token()?;
         if first == b',' {
             self.repaired = true;
             self.input.skip();
             self.walk_ws()?;
-            first = self.input.peek()??;
+            first = self.peek_token()?;
         }
 
         // elements_opt
@@ -304,7 +326,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             let mut ws = Vec::with_capacity(1024);
             self.walk_ws_with_buf(&mut ws)?;
 
-            let next = self.input.peek()??;
+            let next = self.peek_after_ws(&ws)?;
             match next {
                 b']' => {
                     self.output.write_all(&ws)?;
@@ -319,13 +341,13 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
                     self.walk_ws_with_buf(&mut ws)?;
 
-                    let mut c = self.input.peek()??;
+                    let mut c = self.peek_after_ws(&ws)?;
                     while c == b',' {
                         // Remove a duplicate comma.
                         self.repaired = true;
                         self.input.skip();
                         self.walk_ws_with_buf(&mut ws)?;
-                        c = self.input.peek()??;
+                        c = self.peek_after_ws(&ws)?;
                     }
                     match c {
                         b']' => {
@@ -346,6 +368,14 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                 }
             }
         }
+    }
+
+    fn close_if_truncated(&mut self, res: ParserResult, closer: u8) -> ParserResult {
+        if self.truncated && res.is_err() {
+            // Close an unclosed object or array. Nothing else is inserted.
+            self.output.write_all(&[closer])?;
+        }
+        res
     }
 
     fn walk_element(&mut self) -> ParserResult {
@@ -550,6 +580,23 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
         }
     }
 
+    /// Peeks the next byte where an object or array can be closed.
+    fn peek_token(&mut self) -> Result<u8, RepairErr> {
+        self.peek_after_ws(&[])
+    }
+
+    /// Same as `peek_token()`, but flushes the pending whitespaces on the end of file.
+    fn peek_after_ws(&mut self, ws: &[u8]) -> Result<u8, RepairErr> {
+        match self.input.try_peek() {
+            Some(c) => Ok(c?),
+            None => {
+                self.output.write_all(ws)?;
+                self.truncated = true;
+                Err(SyntaxError::UnexpectedEof.into())
+            }
+        }
+    }
+
     fn walk_char_of(&mut self, expected: u8) -> ParserResult {
         let c = self.input.next()??;
         if c != expected {
@@ -581,6 +628,17 @@ mod tests {
         assert!(repair(r#"+"#).0.is_err());
         assert!(repair(r#"++1"#).0.is_err());
         assert!(repair(r#"-+1"#).0.is_err());
+        assert!(repair(r#""#).0.is_err());
+        assert!(repair(r#""a"#).0.is_err());
+        assert!(repair(r#"["a"#).0.is_err());
+        assert!(repair(r#"{"a"#).0.is_err());
+        assert!(repair(r#"[tru"#).0.is_err());
+        assert!(repair(r#"[1e"#).0.is_err());
+        assert!(repair(r#"[-"#).0.is_err());
+        assert!(repair(r#"   "#).0.is_err());
+        assert!(repair(r#"[[1,2, {"a":"#).0.is_err());
+        assert!(repair(r#"{"a": 1, "b" "#).0.is_err());
+        assert!(repair(r#"{"a": {"b": [1], "c": "#).0.is_err());
     }
 
     #[test]
@@ -768,6 +826,30 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!("[0, -7, 0.50, 0e1]", out);
+        }
+        {
+            let s = r#"[[1,2, {"a":[3,"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"[[1,2, {"a":[3]}]]"#, out);
+        }
+        {
+            let s = "[\n  1,\n  {\n    \"a\": [2 ,\n";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[\n  1,\n  {\n    \"a\": [2 \n]}]", out);
+        }
+        {
+            let s = r#"{"a": 1, "#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{"a": 1 }"#, out);
+        }
+        {
+            let s = r#"[{"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[{}]", out);
         }
     }
 }
