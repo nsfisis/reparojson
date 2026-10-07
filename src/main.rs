@@ -1,7 +1,7 @@
 use reparojson::{self, RepairErr, RepairOk, RepairResult};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{stdin, stdout, BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Write, stdin, stdout};
 use std::process::ExitCode;
 
 struct Config {
