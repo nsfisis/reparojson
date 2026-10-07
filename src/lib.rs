@@ -416,6 +416,20 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             }
             b'0' => {
                 self.input.skip();
+                while let Some(c) = self.input.try_peek() {
+                    match c? {
+                        // Remove leading zeros.
+                        b'0' => {
+                            self.repaired = true;
+                            self.input.skip();
+                        }
+                        c if c.is_ascii_digit() => {
+                            self.repaired = true;
+                            return self.walk_integer();
+                        }
+                        _ => break,
+                    }
+                }
                 self.output.write_all(b"0")?;
                 return Ok(());
             }
@@ -701,6 +715,18 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!("[1.5e+2, 0]", out);
+        }
+        {
+            let s = r#"0123"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("123", out);
+        }
+        {
+            let s = r#"[000, -007, 00.50, 0e1]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[0, -7, 0.50, 0e1]", out);
         }
     }
 }
