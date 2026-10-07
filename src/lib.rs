@@ -163,7 +163,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             b'{' => self.walk_object(),
             b'[' => self.walk_array(),
             b'"' => self.walk_string(),
-            b'-' => self.walk_number(),
+            b'-' | b'.' => self.walk_number(),
             c if c.is_ascii_digit() => self.walk_number(),
             _ => Err(SyntaxError::InvalidValue.into()),
         }
@@ -396,17 +396,26 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
     }
 
     fn walk_integer(&mut self) -> ParserResult {
-        let first = self.input.next()??;
+        let first = self.input.peek()??;
         match first {
             b'-' => {
+                self.input.skip();
                 self.output.write_all(b"-")?;
                 return self.walk_integer();
             }
+            b'.' => {
+                // Insert a missing integer part. The fraction part follows.
+                self.repaired = true;
+                self.output.write_all(b"0")?;
+                return Ok(());
+            }
             b'0' => {
+                self.input.skip();
                 self.output.write_all(b"0")?;
                 return Ok(());
             }
             b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9' => {
+                self.input.skip();
                 self.output.write_all(&[first])?;
                 loop {
                     let Some(c) = self.input.try_peek() else {
@@ -532,6 +541,7 @@ mod tests {
         assert!(repair(r#"[,,,]"#).0.is_err());
         assert!(repair(r#"{,,}"#).0.is_err());
         assert!(repair(r#"{,,,}"#).0.is_err());
+        assert!(repair(r#"."#).0.is_err());
     }
 
     #[test]
@@ -659,6 +669,18 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!("[1 ,  2, 3]", out);
+        }
+        {
+            let s = r#".3"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("0.3", out);
+        }
+        {
+            let s = r#"[-.5e1, .25]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[-0.5e1, 0.25]", out);
         }
     }
 }
