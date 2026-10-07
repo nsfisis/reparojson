@@ -340,8 +340,13 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                     self.walk_escape()?;
                 }
                 c if c < 0x20 => {
-                    // A raw byte less than 0x20 cannot be embedded in string.
-                    return Err(SyntaxError::InvalidValue.into());
+                    // A raw byte less than 0x20 cannot be embedded in string, but a tab can
+                    // be escaped.
+                    if c != b'\t' {
+                        return Err(SyntaxError::InvalidValue.into());
+                    }
+                    self.repaired = true;
+                    self.output.write_all(b"\\t")?;
                 }
                 c => {
                     self.output.write_all(&[c])?;
@@ -617,6 +622,12 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!(r#"{"a":1,  "b":  2}"#, out);
+        }
+        {
+            let s = "[\"a\tb\"]";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"["a\tb"]"#, out);
         }
     }
 }
