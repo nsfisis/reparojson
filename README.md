@@ -13,7 +13,7 @@ Arguments:
   [FILE]  The input JSON file (default: STDIN)
 
 Options:
-  -q, --quiet    Successfully exit if the input JSON is repaired
+  -s, --strict   Exit with failure if the input JSON is repaired
   -v, --version  Print version
   -h, --help     Print help
 ```
@@ -38,6 +38,13 @@ $ echo '{ "foo": 1, "bar" 2, }' | reparojson
 See [docs/REPAIR.md](./docs/REPAIR.md) for all what can be repaired.
 
 
+## Exit Status
+
+ReparoJSON exits with 0 if the input is valid or successfully repaired, and with non-zero otherwise.
+
+With `-s`/`--strict`, it also exits with non-zero if the input is repaired. The repaired JSON is still written to the output.
+
+
 ## Editor Integration Examples
 
 ### Neovim v0.11+ with efm-langserver
@@ -52,7 +59,7 @@ vim.lsp.config('efm', {
       languages = {
          json = {
             {
-               formatCommand = "reparojson -q",
+               formatCommand = "reparojson",
                formatStdin = true,
             },
          },

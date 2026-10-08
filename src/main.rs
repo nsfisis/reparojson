@@ -5,7 +5,7 @@ use std::io::{BufReader, BufWriter, Write, stdin, stdout};
 use std::process::ExitCode;
 
 struct Config {
-    quiet: bool,
+    strict: bool,
     file_path: Option<OsString>,
 }
 
@@ -14,7 +14,7 @@ fn parse_args() -> std::io::Result<Config> {
 
     let matches = command!()
         .disable_version_flag(true)
-        .arg(arg!(-q --quiet "Successfully exit if the input JSON is repaired"))
+        .arg(arg!(-s --strict "Exit with failure if the input JSON is repaired"))
         .arg(arg!(-v --version "Print version").action(ArgAction::Version))
         .arg(
             arg!([FILE] "The input JSON file (default: STDIN)")
@@ -22,9 +22,9 @@ fn parse_args() -> std::io::Result<Config> {
         )
         .get_matches();
 
-    let quiet = matches.get_flag("quiet");
+    let strict = matches.get_flag("strict");
     let file_path = matches.get_one("FILE").cloned();
-    Ok(Config { quiet, file_path })
+    Ok(Config { strict, file_path })
 }
 
 fn repair(input_file_path: Option<OsString>, mut w: impl Write) -> RepairResult {
@@ -57,19 +57,19 @@ fn main() -> std::io::Result<ExitCode> {
     let exit_code = match repair(config.file_path, &mut writer) {
         Ok(RepairOk::Valid) => ExitCode::SUCCESS,
         Ok(RepairOk::Repaired) => {
-            if config.quiet {
-                ExitCode::SUCCESS
+            if config.strict {
+                ExitCode::FAILURE
             } else {
-                ExitCode::from(1)
+                ExitCode::SUCCESS
             }
         }
         Err(RepairErr::Invalid(err)) => {
             eprintln!("{}", err);
-            ExitCode::from(2)
+            ExitCode::FAILURE
         }
         Err(RepairErr::IoErr(err)) => {
             eprintln!("{}", err);
-            ExitCode::from(3)
+            ExitCode::FAILURE
         }
     };
 
