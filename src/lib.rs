@@ -246,7 +246,14 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
                     self.walk_ws_with_buf(&mut ws)?;
 
-                    let c = self.peek_after_ws(&ws)?;
+                    let mut c = self.peek_after_ws(&ws)?;
+                    while c == b',' {
+                        // Remove a duplicate comma.
+                        self.repaired = true;
+                        self.input.skip();
+                        self.walk_ws_with_buf(&mut ws)?;
+                        c = self.peek_after_ws(&ws)?;
+                    }
                     match c {
                         b'}' => {
                             self.repaired = true;
@@ -861,6 +868,18 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!(r#"{   "a":1, "b":2}"#, out);
+        }
+        {
+            let s = r#"{"a":1,,"b":2}"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{"a":1,"b":2}"#, out);
+        }
+        {
+            let s = r#"{"a":1 , , "b":2,, ,"c":3,,}"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{"a":1 ,  "b":2, "c":3}"#, out);
         }
     }
 }
