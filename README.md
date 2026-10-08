@@ -38,14 +38,15 @@ $ echo '{ "foo": 1, "bar" 2, }' | reparojson
 
 ## Editor Integration Examples
 
-### Neovim + nvim-lspconfig + efm-langserver
+### Neovim v0.11+ with efm-langserver
 
 ```lua
-local lspconfig = require('lspconfig')
-lspconfig.efm.setup({
+vim.lsp.config('efm', {
+   cmd = { 'efm-langserver' },
+   filetypes = { 'json' },
    init_options = { documentFormatting = true },
    settings = {
-      rootMarkers = {".git/"},
+      rootMarkers = { ".git/" },
       languages = {
          json = {
             {
@@ -56,6 +57,7 @@ lspconfig.efm.setup({
       },
    }
 })
+vim.lsp.enable('efm')
 ```
 
 
