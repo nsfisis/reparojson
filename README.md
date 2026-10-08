@@ -13,9 +13,10 @@ Arguments:
   [FILE]  The input JSON file (default: STDIN)
 
 Options:
-  -s, --strict   Exit with failure if the input JSON is repaired
-  -v, --version  Print version
-  -h, --help     Print help
+  -i, --in-place  Replace the input file in place
+  -s, --strict    Exit with failure if the input JSON is repaired
+  -v, --version   Print version
+  -h, --help      Print help
 ```
 
 
@@ -36,6 +37,17 @@ $ echo '{ "foo": 1, "bar" 2, }' | reparojson
 ```
 
 See [docs/REPAIR.md](./docs/REPAIR.md) for all what can be repaired.
+
+With `-i`/`--in-place`, the repaired JSON is written back to the input file instead of the output. The file is left untouched if it is already valid or cannot be repaired.
+
+```
+$ echo '[ 1 2 ]' > a.json
+
+$ reparojson -i a.json
+
+$ cat a.json
+[ 1, 2 ]
+```
 
 
 ## Exit Status
