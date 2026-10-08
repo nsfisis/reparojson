@@ -10,7 +10,7 @@ struct Config {
 }
 
 fn parse_args() -> std::io::Result<Config> {
-    use clap::{arg, command, value_parser, ArgAction};
+    use clap::{ArgAction, arg, command, value_parser};
 
     let matches = command!()
         .disable_version_flag(true)
