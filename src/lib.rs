@@ -207,19 +207,18 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
         self.walk_ws()?;
 
-        // members_opt
-        let first = self.peek_token()?;
-        if first == b'"' {
-            self.walk_members()?;
-        }
-
-        // trailing_comma_opt
-        let maybe_comma = self.peek_token()?;
-        if maybe_comma == b',' {
+        // leading_comma_opt
+        let mut first = self.peek_token()?;
+        if first == b',' {
             self.repaired = true;
             self.input.skip();
             self.walk_ws()?;
-            self.peek_token()?;
+            first = self.peek_token()?;
+        }
+
+        // members_opt
+        if first == b'"' {
+            self.walk_members()?;
         }
 
         self.walk_char_of(b'}')
@@ -850,6 +849,18 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!("[{}]", out);
+        }
+        {
+            let s = r#"{,"a":1}"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{"a":1}"#, out);
+        }
+        {
+            let s = r#"{ ,  "a":1 "b":2,}"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{   "a":1, "b":2}"#, out);
         }
     }
 }
