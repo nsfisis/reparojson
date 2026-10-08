@@ -400,13 +400,16 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                     self.walk_escape()?;
                 }
                 c if c < 0x20 => {
-                    // A raw byte less than 0x20 cannot be embedded in string, but a tab can
-                    // be escaped.
-                    if c != b'\t' {
-                        return Err(SyntaxError::InvalidValue.into());
-                    }
+                    // A raw byte less than 0x20 cannot be embedded in string. Escape it.
                     self.repaired = true;
-                    self.output.write_all(b"\\t")?;
+                    match c {
+                        0x08 => self.output.write_all(b"\\b")?,
+                        0x09 => self.output.write_all(b"\\t")?,
+                        0x0A => self.output.write_all(b"\\n")?,
+                        0x0C => self.output.write_all(b"\\f")?,
+                        0x0D => self.output.write_all(b"\\r")?,
+                        _ => write!(self.output, "\\u{:04x}", c)?,
+                    }
                 }
                 c => {
                     self.output.write_all(&[c])?;
@@ -772,6 +775,18 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!(r#"["a\tb"]"#, out);
+        }
+        {
+            let s = "[\"a\nb\r\nc\u{08}\u{0C}\"]";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"["a\nb\r\nc\b\f"]"#, out);
+        }
+        {
+            let s = "{\"\u{00}\": \"\u{01}\u{1F}\u{7F}\"}";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("{\"\\u0000\": \"\\u0001\\u001f\u{7F}\"}", out);
         }
         {
             let s = r#"[,1]"#;
