@@ -35,6 +35,8 @@ $ echo '{ "foo": 1, "bar" 2, }' | reparojson
 { "foo": 1, "bar": 2 }
 ```
 
+See [docs/REPAIR.md](./docs/REPAIR.md) for all what can be repaired.
+
 
 ## Editor Integration Examples
 
