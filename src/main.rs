@@ -10,10 +10,12 @@ struct Config {
 }
 
 fn parse_args() -> std::io::Result<Config> {
-    use clap::{arg, command, value_parser};
+    use clap::{arg, command, value_parser, ArgAction};
 
     let matches = command!()
+        .disable_version_flag(true)
         .arg(arg!(-q --quiet "Successfully exit if the input JSON is repaired"))
+        .arg(arg!(-v --version "Print version").action(ArgAction::Version))
         .arg(
             arg!([FILE] "The input JSON file (default: STDIN)")
                 .value_parser(value_parser!(OsString)),

@@ -14,8 +14,8 @@ Arguments:
 
 Options:
   -q, --quiet    Successfully exit if the input JSON is repaired
+  -v, --version  Print version
   -h, --help     Print help
-  -V, --version  Print version
 ```
 
 
