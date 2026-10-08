@@ -1,9 +1,9 @@
 [package]
 name = "reparojson"
-version = "0.3.0"
+version = "1.0.0"
 authors = ["nsfisis"]
 edition = "2024"
-description = "A simple command-line tool to repair JSON. It only fixes the syntactic errors and never formats the given input."
+description = "Command-line tool to repair syntactic errors in JSON without formatting it"
 license-file = "LICENSE"
 
 [dependencies.clap]
