@@ -315,6 +315,9 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
     /// Walks a key of an object member and the following colon.
     fn walk_member_key(&mut self) -> ParserResult {
+        if self.input.peek()?? != b'"' {
+            return Err(SyntaxError::InvalidValue.into());
+        }
         self.walk_string()?;
 
         let mut ws = Vec::new();
@@ -598,6 +601,11 @@ mod tests {
         assert!(repair(r#"[[1,2, {"a":"#).0.is_err());
         assert!(repair(r#"{"a": 1, "b" "#).0.is_err());
         assert!(repair(r#"{"a": {"b": [1], "c": "#).0.is_err());
+        assert!(repair(r#"{"a":1, b":2}"#).0.is_err());
+        assert!(repair(r#"{"a":1 b":2}"#).0.is_err());
+        assert!(repair(r#"{"a":1, 2}"#).0.is_err());
+        assert!(repair(r#"{"a":1]"#).0.is_err());
+        assert!(repair(r#"[1}"#).0.is_err());
     }
 
     #[test]
