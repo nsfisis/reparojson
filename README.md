@@ -1,5 +1,9 @@
 # ReparoJSON
 
+<p align="center">
+  <img src="./assets/logo.svg" alt="ReparoJSON" width="240">
+</p>
+
 A simple command-line tool to "repair" JSON. It only fixes the syntactic errors and never formats the given input.
 
 
