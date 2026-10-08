@@ -1,7 +1,6 @@
-use reparojson::{self, RepairErr, RepairOk, RepairResult};
+use reparojson::{self, RepairErr, RepairOk};
 use std::ffi::{OsStr, OsString};
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Write, stdin, stdout};
+use std::io::{BufWriter, Write, stdout};
 use std::process::ExitCode;
 
 struct Config {
@@ -42,37 +41,6 @@ fn parse_args() -> std::io::Result<Config> {
     })
 }
 
-fn repair(input_file_path: Option<&OsStr>, mut w: impl Write) -> RepairResult {
-    match input_file_path {
-        None => {
-            let reader = stdin().lock();
-            let reader = BufReader::new(reader);
-            reparojson::repair(reader, &mut w)
-        }
-        Some(file_path) => {
-            if file_path == OsStr::new("-") {
-                let reader = stdin().lock();
-                let reader = BufReader::new(reader);
-                reparojson::repair(reader, &mut w)
-            } else {
-                let reader = File::open(file_path)?;
-                let reader = BufReader::new(reader);
-                reparojson::repair(reader, &mut w)
-            }
-        }
-    }
-}
-
-fn repair_in_place(file_path: &OsStr) -> RepairResult {
-    // Buffer the whole output so that the file is left untouched on failure.
-    let mut output = Vec::new();
-    let result = repair(Some(file_path), &mut output)?;
-    if matches!(result, RepairOk::Repaired) {
-        std::fs::write(file_path, output)?;
-    }
-    Ok(result)
-}
-
 fn main() -> std::io::Result<ExitCode> {
     let config = parse_args()?;
 
@@ -80,8 +48,8 @@ fn main() -> std::io::Result<ExitCode> {
     let mut writer = BufWriter::new(writer);
 
     let result = match config.file_path.as_deref() {
-        Some(file_path) if config.in_place => repair_in_place(file_path),
-        file_path => repair(file_path, &mut writer),
+        Some(file_path) if config.in_place => reparojson::repair_file_in_place(file_path),
+        file_path => reparojson::repair_file(file_path, &mut writer),
     };
 
     let exit_code = match result {

@@ -1,4 +1,6 @@
-use std::io::{BufReader, Read, Write};
+use std::ffi::OsStr;
+use std::fs::File;
+use std::io::{BufReader, Read, Write, stdin};
 use std::iter::Peekable;
 
 pub type RepairResult = Result<RepairOk, RepairErr>;
@@ -55,6 +57,37 @@ pub fn repair(r: impl Read, mut w: impl Write) -> RepairResult {
         }),
         Err(err) => Err(err),
     }
+}
+
+pub fn repair_file(input_file_path: Option<&OsStr>, mut w: impl Write) -> RepairResult {
+    match input_file_path {
+        None => {
+            let reader = stdin().lock();
+            let reader = BufReader::new(reader);
+            repair(reader, &mut w)
+        }
+        Some(file_path) => {
+            if file_path == OsStr::new("-") {
+                let reader = stdin().lock();
+                let reader = BufReader::new(reader);
+                repair(reader, &mut w)
+            } else {
+                let reader = File::open(file_path)?;
+                let reader = BufReader::new(reader);
+                repair(reader, &mut w)
+            }
+        }
+    }
+}
+
+pub fn repair_file_in_place(file_path: &OsStr) -> RepairResult {
+    // Buffer the whole output so that the file is left untouched on failure.
+    let mut output = Vec::new();
+    let result = repair_file(Some(file_path), &mut output)?;
+    if matches!(result, RepairOk::Repaired) {
+        std::fs::write(file_path, output)?;
+    }
+    Ok(result)
 }
 
 struct Parser<'input, 'output, I: ByteStream, W: Write> {
