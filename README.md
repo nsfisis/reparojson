@@ -29,7 +29,7 @@ $ echo '[ 1, 2, ]' | reparojson
 [ 1, 2 ]
 
 $ echo '{ "foo": 1 "bar": 2 }' | reparojson
-{ "foo": 1 ,"bar": 2 }
+{ "foo": 1, "bar": 2 }
 
 $ echo '{ "foo": 1, "bar" 2, }' | reparojson
 { "foo": 1, "bar": 2 }
