@@ -158,6 +158,81 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
     }
 
     fn walk_value(&mut self) -> ParserResult {
+        // Closers of the objects and arrays that are not closed yet. Nested values are walked
+        // with this explicit stack instead of recursion, so that deeply nested input does not
+        // overflow the call stack.
+        let mut closers = Vec::new();
+        let res = self.walk_value_body(&mut closers);
+        if self.truncated && res.is_err() {
+            // Close unclosed objects and arrays. Nothing else is inserted.
+            closers.reverse();
+            self.output.write_all(&closers)?;
+        }
+        res
+    }
+
+    #[inline(always)]
+    fn walk_value_body(&mut self, closers: &mut Vec<u8>) -> ParserResult {
+        let mut ws = Vec::with_capacity(1024);
+        loop {
+            let c = self.input.peek()??;
+            match c {
+                b'{' | b'[' => {
+                    let closer = if c == b'{' { b'}' } else { b']' };
+                    self.output.write_all(&[c])?;
+                    self.input.skip(); // => { or [
+                    closers.push(closer);
+
+                    self.walk_ws()?;
+
+                    // leading_comma_opt
+                    let mut first = self.peek_token()?;
+                    if first == b',' {
+                        self.repaired = true;
+                        self.input.skip();
+                        self.walk_ws()?;
+                        first = self.peek_token()?;
+                    }
+
+                    // members_opt or elements_opt
+                    let has_items = if closer == b'}' {
+                        first == b'"'
+                    } else {
+                        first != b']'
+                    };
+                    if has_items {
+                        if closer == b'}' {
+                            self.walk_member_key()?;
+                        }
+                        // Walk the first value in the object or array.
+                        continue;
+                    }
+
+                    self.walk_char_of(closer)?;
+                    closers.pop();
+                }
+                _ => self.walk_scalar()?,
+            }
+
+            // A value ends here. Close the objects and arrays that end with it.
+            loop {
+                let Some(&closer) = closers.last() else {
+                    return Ok(());
+                };
+                if self.walk_separator(closer, &mut ws)? {
+                    if closer == b'}' {
+                        self.walk_member_key()?;
+                    }
+                    // Walk the next value in the object or array.
+                    break;
+                }
+                self.walk_char_of(closer)?;
+                closers.pop();
+            }
+        }
+    }
+
+    fn walk_scalar(&mut self) -> ParserResult {
         let c = self.input.peek()??;
 
         match c {
@@ -186,8 +261,6 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                 self.walk_char_of(b'e')?;
                 Ok(())
             }
-            b'{' => self.walk_object(),
-            b'[' => self.walk_array(),
             b'"' => self.walk_string(),
             b'-' | b'+' | b'.' => self.walk_number(),
             c if c.is_ascii_digit() => self.walk_number(),
@@ -195,87 +268,53 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
         }
     }
 
-    fn walk_object(&mut self) -> ParserResult {
-        let res = self.walk_object_body();
-        self.close_if_truncated(res, b'}')
-    }
+    /// Walks a separator between members or elements. Returns true if another member or element
+    /// follows, or false if the object or array ends.
+    fn walk_separator(&mut self, closer: u8, ws: &mut Vec<u8>) -> Result<bool, RepairErr> {
+        ws.clear();
+        self.walk_ws_with_buf(ws)?;
 
-    #[inline(always)]
-    fn walk_object_body(&mut self) -> ParserResult {
-        self.output.write_all(b"{")?;
-        self.input.skip(); // => {
+        let next = self.peek_after_ws(ws)?;
+        if next == closer {
+            self.output.write_all(ws)?;
+            return Ok(false);
+        }
+        if next != b',' {
+            // Insert a missing comma.
+            self.repaired = true;
+            self.output.write_all(b",")?;
+            self.output.write_all(ws)?;
+            return Ok(true);
+        }
 
-        self.walk_ws()?;
+        self.output.write_all(ws)?;
+        ws.clear();
 
-        // leading_comma_opt
-        let mut first = self.peek_token()?;
-        if first == b',' {
+        self.input.skip();
+
+        self.walk_ws_with_buf(ws)?;
+
+        let mut c = self.peek_after_ws(ws)?;
+        while c == b',' {
+            // Remove a duplicate comma.
             self.repaired = true;
             self.input.skip();
-            self.walk_ws()?;
-            first = self.peek_token()?;
+            self.walk_ws_with_buf(ws)?;
+            c = self.peek_after_ws(ws)?;
         }
-
-        // members_opt
-        if first == b'"' {
-            self.walk_members()?;
+        if c == closer {
+            // Remove a trailing comma.
+            self.repaired = true;
+            self.output.write_all(ws)?;
+            return Ok(false);
         }
-
-        self.walk_char_of(b'}')
+        self.output.write_all(b",")?;
+        self.output.write_all(ws)?;
+        Ok(true)
     }
 
-    fn walk_members(&mut self) -> ParserResult {
-        loop {
-            self.walk_member()?;
-
-            let mut ws = Vec::with_capacity(1024);
-            self.walk_ws_with_buf(&mut ws)?;
-
-            let next = self.peek_after_ws(&ws)?;
-            match next {
-                b'}' => {
-                    self.output.write_all(&ws)?;
-                    return Ok(());
-                }
-                b',' => {
-                    self.output.write_all(&ws)?;
-                    // Re-use the memory buffer to avoid another allocation.
-                    ws.clear();
-
-                    self.input.skip();
-
-                    self.walk_ws_with_buf(&mut ws)?;
-
-                    let mut c = self.peek_after_ws(&ws)?;
-                    while c == b',' {
-                        // Remove a duplicate comma.
-                        self.repaired = true;
-                        self.input.skip();
-                        self.walk_ws_with_buf(&mut ws)?;
-                        c = self.peek_after_ws(&ws)?;
-                    }
-                    match c {
-                        b'}' => {
-                            self.repaired = true;
-                            self.output.write_all(&ws)?;
-                            return Ok(());
-                        }
-                        _ => {
-                            self.output.write_all(b",")?;
-                            self.output.write_all(&ws)?;
-                        }
-                    }
-                }
-                _ => {
-                    self.repaired = true;
-                    self.output.write_all(b",")?;
-                    self.output.write_all(&ws)?;
-                }
-            }
-        }
-    }
-
-    fn walk_member(&mut self) -> ParserResult {
+    /// Walks a key of an object member and the following colon.
+    fn walk_member_key(&mut self) -> ParserResult {
         self.walk_string()?;
 
         let mut ws = Vec::new();
@@ -292,96 +331,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             self.output.write_all(&ws)?;
         }
 
-        self.walk_ws()?;
-        self.walk_value()
-    }
-
-    fn walk_array(&mut self) -> ParserResult {
-        let res = self.walk_array_body();
-        self.close_if_truncated(res, b']')
-    }
-
-    #[inline(always)]
-    fn walk_array_body(&mut self) -> ParserResult {
-        self.output.write_all(b"[")?;
-        self.input.skip(); // => [
-
-        self.walk_ws()?;
-
-        // leading_comma_opt
-        let mut first = self.peek_token()?;
-        if first == b',' {
-            self.repaired = true;
-            self.input.skip();
-            self.walk_ws()?;
-            first = self.peek_token()?;
-        }
-
-        // elements_opt
-        if first != b']' {
-            self.walk_elements()?;
-        }
-
-        self.walk_char_of(b']')
-    }
-
-    fn walk_elements(&mut self) -> ParserResult {
-        loop {
-            self.walk_value()?;
-
-            let mut ws = Vec::with_capacity(1024);
-            self.walk_ws_with_buf(&mut ws)?;
-
-            let next = self.peek_after_ws(&ws)?;
-            match next {
-                b']' => {
-                    self.output.write_all(&ws)?;
-                    return Ok(());
-                }
-                b',' => {
-                    self.output.write_all(&ws)?;
-                    // Re-use the memory buffer to avoid another allocation.
-                    ws.clear();
-
-                    self.input.skip();
-
-                    self.walk_ws_with_buf(&mut ws)?;
-
-                    let mut c = self.peek_after_ws(&ws)?;
-                    while c == b',' {
-                        // Remove a duplicate comma.
-                        self.repaired = true;
-                        self.input.skip();
-                        self.walk_ws_with_buf(&mut ws)?;
-                        c = self.peek_after_ws(&ws)?;
-                    }
-                    match c {
-                        b']' => {
-                            self.repaired = true;
-                            self.output.write_all(&ws)?;
-                            return Ok(());
-                        }
-                        _ => {
-                            self.output.write_all(b",")?;
-                            self.output.write_all(&ws)?;
-                        }
-                    }
-                }
-                _ => {
-                    self.repaired = true;
-                    self.output.write_all(b",")?;
-                    self.output.write_all(&ws)?;
-                }
-            }
-        }
-    }
-
-    fn close_if_truncated(&mut self, res: ParserResult, closer: u8) -> ParserResult {
-        if self.truncated && res.is_err() {
-            // Close an unclosed object or array. Nothing else is inserted.
-            self.output.write_all(&[closer])?;
-        }
-        res
+        self.walk_ws()
     }
 
     fn walk_element(&mut self) -> ParserResult {

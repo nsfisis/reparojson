@@ -50,13 +50,6 @@ fn n_json_files_should_be_invalid() {
             continue;
         }
 
-        // Skip test cases that cause stack overflow.
-        if *name == *"n_structure_100000_opening_arrays.json"
-            || *name == *"n_structure_open_array_object.json"
-        {
-            continue;
-        }
-
         let input = std::fs::read(&path).expect("failed to read file");
         let mut output = Vec::new();
         let result = reparojson::repair(&input[..], &mut output);
