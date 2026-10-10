@@ -458,6 +458,10 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             self.repaired = true;
             self.input.skip();
         }
+        if self.input.peek()?? == b'-' {
+            self.input.skip();
+            self.output.write_all(b"-")?;
+        }
         self.walk_integer()?;
         self.walk_fraction()?;
         self.walk_exponent()
@@ -466,11 +470,6 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
     fn walk_integer(&mut self) -> ParserResult {
         let first = self.input.peek()??;
         match first {
-            b'-' => {
-                self.input.skip();
-                self.output.write_all(b"-")?;
-                return self.walk_integer();
-            }
             b'.' => {
                 // Insert a missing integer part. The fraction part follows.
                 self.repaired = true;
@@ -644,6 +643,11 @@ mod tests {
         assert!(repair(r#"+"#).0.is_err());
         assert!(repair(r#"++1"#).0.is_err());
         assert!(repair(r#"-+1"#).0.is_err());
+        assert!(repair(r#"--1"#).0.is_err());
+        assert!(repair(r#"[--1]"#).0.is_err());
+        assert!(repair(r#"+--1"#).0.is_err());
+        assert!(repair(r#"0-1"#).0.is_err());
+        assert!(repair(r#"-"#).0.is_err());
         assert!(repair(r#""#).0.is_err());
         assert!(repair(r#""a"#).0.is_err());
         assert!(repair(r#"["a"#).0.is_err());

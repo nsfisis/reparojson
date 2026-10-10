@@ -4,6 +4,7 @@
 
 * Added `--generate-completion <SHELL>` option to generate the shell completion script.
 * Fixed excessive repair: a missing comma is no longer inserted between numbers or literals (`null`, `true`, `false`) that have no whitespace between them. For example, `[1+2]` was repaired into `[1,2]`, but is now rejected as invalid.
+* Fixed a number with multiple minus signs (e.g., `[--1]`) being accepted as valid and output as is. It is now rejected as invalid.
 
 ## v1.0.0
 
