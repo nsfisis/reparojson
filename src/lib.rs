@@ -710,6 +710,36 @@ mod tests {
     }
 
     #[test]
+    fn test_repair_huge_number() {
+        {
+            let s = r#"[123456789012345678901234567890, -123456789012345678901234567890]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Valid)));
+            assert_eq!(s, out);
+        }
+        {
+            let s = r#"[1e999999999999, -1E+999999999999, 1e-999999999999, 0.0e-999999999999]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Valid)));
+            assert_eq!(s, out);
+        }
+        {
+            let digits = "9".repeat(100_000);
+            let s = format!("-{digits}.{digits}e-{digits}");
+            let (res, out) = repair(&s);
+            assert!(matches!(res, Ok(super::RepairOk::Valid)));
+            assert_eq!(s, out);
+        }
+        {
+            let digits = "9".repeat(100_000);
+            let s = format!("[+0{digits}, .{digits}e+{digits}]");
+            let (res, out) = repair(&s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(format!("[{digits}, 0.{digits}e+{digits}]"), out);
+        }
+    }
+
+    #[test]
     fn test_repair_bom() {
         {
             let s = "\u{FEFF}[1, 2]";

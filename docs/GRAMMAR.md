@@ -180,5 +180,6 @@ minus
 * In `elements`, `separator` cannot be empty if `value` on its left is a number, `"true"`, `"false"` or `"null"`, `ws` between them is empty, and `value` on its right does not begin with `'"'`, `'['` or `'{'`. For example, `[1 2]` and `[1"a"]` are accepted, but `[1+2]` and `[truefalse]` are not.
 * Any number of `'}'` and `']'` at the end of the input can be omitted. That is, an input is also accepted if it matches the grammar after `'}'` and `']'` are appended to it. For example, `[1, {"a": [2,` is accepted because `[1, {"a": [2,]}]` matches the grammar.
 * The input is processed as a sequence of bytes and is not validated as UTF-8. `bom` is the three bytes `EF BB BF`, and any byte other than `'"'` and `'\'` is accepted as `character`.
+* There is no limit on the nesting depth of objects and arrays, the length of a string, or the magnitude and the number of digits of a number. Numbers are not interpreted, so a number that does not fit in any numeric type (e.g., `1e999999999999`) is accepted as is.
 
 See [REPAIR.md](./REPAIR.md) for how the accepted input is repaired.
