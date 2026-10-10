@@ -1,3 +1,5 @@
+pub mod cli;
+
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufReader, Read, Write, stdin};
