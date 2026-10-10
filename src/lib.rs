@@ -211,6 +211,8 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
         let mut ws = Vec::with_capacity(1024);
         loop {
             let c = self.input.peek()??;
+            // True if the value that ends here is a number or a literal (null, true or false).
+            let mut bare = false;
             match c {
                 b'{' | b'[' => {
                     let closer = if c == b'{' { b'}' } else { b']' };
@@ -246,7 +248,10 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                     self.walk_char_of(closer)?;
                     closers.pop();
                 }
-                _ => self.walk_scalar()?,
+                _ => {
+                    self.walk_scalar()?;
+                    bare = c != b'"';
+                }
             }
 
             // A value ends here. Close the objects and arrays that end with it.
@@ -254,7 +259,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                 let Some(&closer) = closers.last() else {
                     return Ok(());
                 };
-                if self.walk_separator(closer, &mut ws)? {
+                if self.walk_separator(closer, bare, &mut ws)? {
                     if closer == b'}' {
                         self.walk_member_key()?;
                     }
@@ -263,6 +268,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                 }
                 self.walk_char_of(closer)?;
                 closers.pop();
+                bare = false;
             }
         }
     }
@@ -304,8 +310,14 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
     }
 
     /// Walks a separator between members or elements. Returns true if another member or element
-    /// follows, or false if the object or array ends.
-    fn walk_separator(&mut self, closer: u8, ws: &mut Vec<u8>) -> Result<bool, RepairErr> {
+    /// follows, or false if the object or array ends. `bare` tells if the preceding value is a
+    /// number or a literal.
+    fn walk_separator(
+        &mut self,
+        closer: u8,
+        bare: bool,
+        ws: &mut Vec<u8>,
+    ) -> Result<bool, RepairErr> {
         ws.clear();
         self.walk_ws_with_buf(ws)?;
 
@@ -315,6 +327,11 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             return Ok(false);
         }
         if next != b',' {
+            // Two adjacent numbers or literals (e.g., `1+2`) are more likely a broken value than
+            // two values that lack a comma.
+            if bare && ws.is_empty() && !matches!(next, b'"' | b'[' | b'{') {
+                return Err(SyntaxError::InvalidValue.into());
+            }
             // Insert a missing comma.
             self.repaired = true;
             self.output.write_all(b",")?;
@@ -641,6 +658,15 @@ mod tests {
         assert!(repair(r#"{"a":1, 2}"#).0.is_err());
         assert!(repair(r#"{"a":1]"#).0.is_err());
         assert!(repair(r#"[1}"#).0.is_err());
+        assert!(repair(r#"[1+2]"#).0.is_err());
+        assert!(repair(r#"[1-2]"#).0.is_err());
+        assert!(repair(r#"[1.2.3]"#).0.is_err());
+        assert!(repair(r#"[1e2.3]"#).0.is_err());
+        assert!(repair(r#"[truefalse]"#).0.is_err());
+        assert!(repair(r#"[null1]"#).0.is_err());
+        assert!(repair(r#"[1true]"#).0.is_err());
+        assert!(repair(r#"[[1]2, 3-4]"#).0.is_err());
+        assert!(repair(r#"{"a":1-2}"#).0.is_err());
     }
 
     #[test]
@@ -726,6 +752,36 @@ mod tests {
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!("[1,   2  ]", out);
+        }
+        {
+            let s = r#"[1 +2 -3 .4]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[1, 2, -3, 0.4]", out);
+        }
+        {
+            let s = "[true\tfalse\nnull]";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[true,\tfalse,\nnull]", out);
+        }
+        {
+            let s = r#"[1"a"2"b""c"true]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"[1,"a",2,"b","c",true]"#, out);
+        }
+        {
+            let s = r#"[1[2]3{}null[]{}-4]"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"[1,[2],3,{},null,[],{},-4]"#, out);
+        }
+        {
+            let s = r#"{"a":1"b":true"c":[]"d":"e""f":{}}"#;
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!(r#"{"a":1,"b":true,"c":[],"d":"e","f":{}}"#, out);
         }
         {
             let s = r#"{  , }"#;
