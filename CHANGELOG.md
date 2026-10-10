@@ -3,6 +3,7 @@
 ## Unreleased
 
 * Added `--generate-completion <SHELL>` option to generate the shell completion script.
+* Changed where unclosed objects and arrays are closed: the closing brackets are now inserted right after the last value, `{` or `[`, instead of after the whitespaces at the end of the input. For example, `[1,2<newline>` was repaired into `[1,2<newline>]`, but is now repaired into `[1,2]<newline>`.
 * Fixed excessive repair: a missing comma is no longer inserted between numbers or literals (`null`, `true`, `false`) that have no whitespace between them. For example, `[1+2]` was repaired into `[1,2]`, but is now rejected as invalid.
 * Fixed a number with multiple minus signs (e.g., `[--1]`) being accepted as valid and output as is. It is now rejected as invalid.
 

@@ -199,18 +199,21 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
         // with this explicit stack instead of recursion, so that deeply nested input does not
         // overflow the call stack.
         let mut closers = Vec::new();
-        let res = self.walk_value_body(&mut closers);
+        // Whitespaces that are read but not written yet.
+        let mut ws = Vec::with_capacity(1024);
+        let res = self.walk_value_body(&mut closers, &mut ws);
         if self.truncated && res.is_err() {
-            // Close unclosed objects and arrays. Nothing else is inserted.
+            // Close unclosed objects and arrays right after the last token, so that the pending
+            // whitespaces remain at the end of the output. Nothing else is inserted.
             closers.reverse();
             self.output.write_all(&closers)?;
+            self.output.write_all(&ws)?;
         }
         res
     }
 
     #[inline(always)]
-    fn walk_value_body(&mut self, closers: &mut Vec<u8>) -> ParserResult {
-        let mut ws = Vec::with_capacity(1024);
+    fn walk_value_body(&mut self, closers: &mut Vec<u8>, ws: &mut Vec<u8>) -> ParserResult {
         loop {
             let c = self.input.peek()??;
             // True if the value that ends here is a number or a literal (null, true or false).
@@ -222,16 +225,18 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                     self.input.skip(); // => { or [
                     closers.push(closer);
 
-                    self.walk_ws()?;
+                    ws.clear();
+                    self.walk_ws_with_buf(ws)?;
 
                     // leading_comma
                     let mut first = self.peek_token()?;
                     if first == b',' {
                         self.repaired = true;
                         self.input.skip();
-                        self.walk_ws()?;
+                        self.walk_ws_with_buf(ws)?;
                         first = self.peek_token()?;
                     }
+                    self.output.write_all(ws)?;
 
                     // members or elements
                     let has_items = if closer == b'}' {
@@ -261,7 +266,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                 let Some(&closer) = closers.last() else {
                     return Ok(());
                 };
-                if self.walk_separator(closer, bare, &mut ws)? {
+                if self.walk_separator(closer, bare, ws)? {
                     if closer == b'}' {
                         self.walk_member_key()?;
                     }
@@ -323,7 +328,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
         ws.clear();
         self.walk_ws_with_buf(ws)?;
 
-        let next = self.peek_after_ws(ws)?;
+        let next = self.peek_token()?;
         if next == closer {
             self.output.write_all(ws)?;
             return Ok(false);
@@ -341,20 +346,18 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             return Ok(true);
         }
 
-        self.output.write_all(ws)?;
-        ws.clear();
-
         self.input.skip();
 
+        let ws_before_comma = ws.len();
         self.walk_ws_with_buf(ws)?;
 
-        let mut c = self.peek_after_ws(ws)?;
+        let mut c = self.peek_token()?;
         while c == b',' {
             // Remove a duplicate comma.
             self.repaired = true;
             self.input.skip();
             self.walk_ws_with_buf(ws)?;
-            c = self.peek_after_ws(ws)?;
+            c = self.peek_token()?;
         }
         if c == closer {
             // Remove a trailing comma.
@@ -362,8 +365,9 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
             self.output.write_all(ws)?;
             return Ok(false);
         }
+        self.output.write_all(&ws[..ws_before_comma])?;
         self.output.write_all(b",")?;
-        self.output.write_all(ws)?;
+        self.output.write_all(&ws[ws_before_comma..])?;
         Ok(true)
     }
 
@@ -595,17 +599,13 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
         }
     }
 
-    /// Peeks the next byte where an object or array can be closed.
+    /// Peeks the next byte where an object or array can be closed. The caller must not write the
+    /// preceding whitespaces before calling this, because they are written after the closers on
+    /// the end of file.
     fn peek_token(&mut self) -> Result<u8, RepairErr> {
-        self.peek_after_ws(&[])
-    }
-
-    /// Same as `peek_token()`, but flushes the pending whitespaces on the end of file.
-    fn peek_after_ws(&mut self, ws: &[u8]) -> Result<u8, RepairErr> {
         match self.input.try_peek() {
             Some(c) => Ok(c?),
             None => {
-                self.output.write_all(ws)?;
                 self.truncated = true;
                 Err(SyntaxError::UnexpectedEof.into())
             }
@@ -943,19 +943,55 @@ mod tests {
             let s = "[\n  1,\n  {\n    \"a\": [2 ,\n";
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
-            assert_eq!("[\n  1,\n  {\n    \"a\": [2 \n]}]", out);
+            assert_eq!("[\n  1,\n  {\n    \"a\": [2]}] \n", out);
         }
         {
             let s = r#"{"a": 1, "#;
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
-            assert_eq!(r#"{"a": 1 }"#, out);
+            assert_eq!(r#"{"a": 1} "#, out);
         }
         {
             let s = r#"[{"#;
             let (res, out) = repair(s);
             assert!(matches!(res, Ok(super::RepairOk::Repaired)));
             assert_eq!("[{}]", out);
+        }
+        {
+            let s = "[1,2\n";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[1,2]\n", out);
+        }
+        {
+            let s = "[[1]\r\n";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[[1]]\r\n", out);
+        }
+        {
+            let s = "{\n  \"a\": [\n";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("{\n  \"a\": []}\n", out);
+        }
+        {
+            let s = "[ , \n";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[]  \n", out);
+        }
+        {
+            let s = "[\n  1,\n  2\n";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[\n  1,\n  2]\n", out);
+        }
+        {
+            let s = "[\n  1 , ,\n  ";
+            let (res, out) = repair(s);
+            assert!(matches!(res, Ok(super::RepairOk::Repaired)));
+            assert_eq!("[\n  1]  \n  ", out);
         }
         {
             let s = r#"{,"a":1}"#;

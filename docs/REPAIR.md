@@ -93,6 +93,13 @@ $ printf '[1, {"a": [2,' | reparojson
 [1, {"a": [2]}]
 ```
 
+The closing brackets are inserted right after the last value, `{` or `[`, so whitespaces at the end of the input are kept at the end of the output.
+
+```
+$ echo '[1, 2,' | reparojson
+[1, 2]
+```
+
 They are closed only if the input ends where they can be closed: right after `{` or `[`, after a value, or after a comma. An input that ends in the middle of a value (e.g., `["a`) or before a value of an object member (e.g., `{"a":`) is not repaired.
 
 
