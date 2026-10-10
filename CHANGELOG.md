@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.1.0
 
 * Added `--generate-completion <SHELL>` option to generate the shell completion script.
 * Changed where unclosed objects and arrays are closed: the closing brackets are now inserted right after the last value, `{` or `[`, instead of after the whitespaces at the end of the input. For example, `[1,2<newline>` was repaired into `[1,2<newline>]`, but is now repaired into `[1,2]<newline>`.
