@@ -41,7 +41,7 @@ $ echo '{ "foo": 1, "bar" 2, }' | reparojson
 { "foo": 1, "bar": 2 }
 ```
 
-See [docs/REPAIR.md](./docs/REPAIR.md) for all what can be repaired.
+See [docs/REPAIR.md](./docs/REPAIR.md) for all what can be repaired, and [docs/GRAMMAR.md](./docs/GRAMMAR.md) for the exact grammar that ReparoJSON accepts.
 
 With `-i`/`--in-place`, the repaired JSON is written back to the input file instead of the output. The file is left untouched if it is already valid or cannot be repaired.
 

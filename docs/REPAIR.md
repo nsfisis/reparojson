@@ -1,6 +1,6 @@
 # What Can Be Repaired
 
-ReparoJSON repairs the following mistakes. Everything else in the input, including whitespaces, is kept as it is.
+ReparoJSON repairs the following mistakes. Everything else in the input, including whitespaces, is kept as it is. See [GRAMMAR.md](./GRAMMAR.md) for the exact grammar that ReparoJSON accepts.
 
 
 ## Commas

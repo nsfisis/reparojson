@@ -92,6 +92,8 @@ pub fn repair_file_in_place(file_path: &OsStr) -> RepairResult {
     Ok(result)
 }
 
+/// Walks the input and writes the repaired JSON to the output. See docs/GRAMMAR.md for the
+/// grammar it accepts.
 struct Parser<'input, 'output, I: ByteStream, W: Write> {
     input: &'input mut I,
     output: &'output mut W,
@@ -222,7 +224,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
 
                     self.walk_ws()?;
 
-                    // leading_comma_opt
+                    // leading_comma
                     let mut first = self.peek_token()?;
                     if first == b',' {
                         self.repaired = true;
@@ -231,7 +233,7 @@ impl<'input, 'output, I: ByteStream, W: Write> Parser<'input, 'output, I, W> {
                         first = self.peek_token()?;
                     }
 
-                    // members_opt or elements_opt
+                    // members or elements
                     let has_items = if closer == b'}' {
                         first == b'"'
                     } else {
