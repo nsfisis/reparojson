@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+* Added `--generate-completion <SHELL>` option to generate the shell completion script.
+
 ## v1.0.0
 
 First stable version released!

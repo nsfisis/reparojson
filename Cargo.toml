@@ -6,6 +6,9 @@ edition = "2024"
 description = "Command-line tool to repair syntactic errors in JSON without formatting it"
 license-file = "LICENSE"
 
+[dependencies]
+clap_complete = "4.6.11"
+
 [dependencies.clap]
 version = "4.6.7"
 features = ["cargo"]

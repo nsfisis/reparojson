@@ -17,10 +17,11 @@ Arguments:
   [FILE]  The input JSON file (default: STDIN)
 
 Options:
-  -i, --in-place  Replace the input file in place
-  -s, --strict    Exit with failure if the input JSON is repaired
-  -v, --version   Print version
-  -h, --help      Print help
+  -i, --in-place                     Replace the input file in place
+  -s, --strict                       Exit with failure if the input JSON is repaired
+      --generate-completion <SHELL>  Generate the completion script for the given shell [possible values: bash, elvish, fish, powershell, zsh]
+  -v, --version                      Print version
+  -h, --help                         Print help
 ```
 
 

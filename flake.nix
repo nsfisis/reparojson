@@ -59,6 +59,15 @@
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
 
+          nativeBuildInputs = [ pkgs.installShellFiles ];
+
+          postInstall = pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
+            installShellCompletion --cmd reparojson \
+              --bash <($out/bin/reparojson --generate-completion bash) \
+              --fish <($out/bin/reparojson --generate-completion fish) \
+              --zsh <($out/bin/reparojson --generate-completion zsh)
+          '';
+
           meta = {
             description = "Command-line tool to repair syntactic errors in JSON without formatting it";
             homepage = "https://github.com/nsfisis/reparojson";
